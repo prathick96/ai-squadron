@@ -1,6 +1,6 @@
 """
 packages/agents/deployment_team.py
-Deployment Team Node — Vercel deploy (SaaS) + platform media publishing.
+Deployment Team Node — Railway deploy (SaaS) + platform media publishing.
 No LLM needed — pure deterministic tool execution.
 """
 from __future__ import annotations
@@ -36,11 +36,11 @@ async def deployment_team_node(state: AgentState) -> AgentState:
     now = datetime.now(timezone.utc).isoformat()
 
     if is_saas:
-        # Stub: replace with live Vercel Deploy API call in Phase 1 Day 21
+        # Stub: replace with live Railway Deploy API call in Phase 1 Day 21
         saas_entry = DeploymentEntry(
             type            = "SAAS",
-            platform        = "vercel",
-            url             = f"https://{venture_id}.yourdomain.com",
+            platform        = "railway",
+            url             = f"https://{venture_id}.up.railway.app",
             deployment_id   = f"dpl_{venture_id[:8]}",
             deployed_at     = now,
             smoke_test_passed = True,

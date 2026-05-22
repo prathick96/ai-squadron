@@ -54,7 +54,7 @@ See [RESEARCH_COUNCIL.md](./RESEARCH_COUNCIL.md).
 **Produces:** `TechSpec` artifact, `TECH_SPEC_READY` event  
 
 **Responsibilities**
-- Translate brief into a Technical Specification: user flows, P0/P1 features, data models, API routes, stack defaults (React 19 + Vite, FastAPI, Supabase, Vercel).
+- Translate brief into a Technical Specification: user flows, P0/P1 features, data models, API routes, stack defaults (React 19 + Vite, FastAPI, Supabase, Railway).
 - Set `product_type`: `MICRO_SAAS` | `MEDIA_CHANNEL` | `AFFILIATE_SITE` (routes pipeline branch).
 - Estimate build complexity and token budget for Engineering.
 
@@ -147,7 +147,7 @@ See [RESEARCH_COUNCIL.md](./RESEARCH_COUNCIL.md).
 **Produces:** `DeploymentReceipt`, `DEPLOYMENT_COMPLETE` event  
 
 **Responsibilities**
-- SaaS: Vercel Deploy API, smoke test URL.
+- SaaS: Railway Deploy API, smoke test URL.
 - Media: YouTube Data API v3 / TikTok Content Posting API (when approved) / Instagram Graph API.
 - Respect Account Distribution rate limits from clearance.
 

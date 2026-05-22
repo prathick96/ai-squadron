@@ -75,7 +75,7 @@ Assumes: 1 founder, free tiers, 20h/week oversight, QA gate live, no paid ads un
 
 | Item | Phase 0–1 (free) | Phase 3 (growth) |
 |------|------------------|------------------|
-| Hosting (Vercel/Supabase free) | $0–$20 | $50–$300 |
+| Hosting (Railway/Supabase free) | $0–$20 | $50–$300 |
 | LLM APIs | $0–$50 | $200–$2,000 |
 | Voice (ElevenLabs) | $0–$22 | $100–$500 |
 | Video compute | $0 (local FFmpeg) | $50–$400 |

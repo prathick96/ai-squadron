@@ -32,7 +32,7 @@ Produce a TechSpec JSON:
   "venture_id": "{venture_id}",
   "product_type": "MICRO_SAAS",
   "stack": {{"frontend": "React 19 + Vite", "backend": "Python FastAPI",
-             "database": "PostgreSQL", "auth": "Supabase Auth", "hosting": "Vercel"}},
+             "database": "PostgreSQL", "auth": "Supabase Auth", "hosting": "Railway"}},
   "features": [{{"feature_id": "feat_001", "name": "...", "priority": "P0",
                  "user_story": "...", "acceptance_criteria": ["..."],
                  "estimated_components": ["..."]}}],

@@ -142,7 +142,7 @@ class SecurityAgentNode(StubNode):
 class DeploymentTeamNode(StubNode):
     """
     REAL IMPLEMENTATION TARGET (Week 5):
-    - Vercel Deploy API: triggers deploy, polls for completion, captures URL
+    - Railway Deploy API: triggers deploy, polls for completion, captures URL
     - Platform APIs: YouTube Data API v3, TikTok Content Posting API, Instagram Graph API
     - Runs 5-minute post-deployment smoke test
     - Sets state["deployment_receipt"]

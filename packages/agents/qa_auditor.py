@@ -180,7 +180,7 @@ async def _validate_build(build: dict) -> tuple[list[str], list[str]]:
     if build.get("vite_build_exit_code", 1) != 0:
         failures.append("vite_build_exit_code")
 
-    # Bundle size (Vercel Hobby limit: 250MB uncompressed)
+    # Bundle size (Railway compute limit: 250MB uncompressed)
     if build.get("bundle_size_kb", 0) > 250_000:
         failures.append("bundle_size")
 

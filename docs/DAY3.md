@@ -56,7 +56,7 @@ python -m apps.orchestrator.main --mode single
 python scripts/record_revenue.py --venture-id ven_XXXXX --amount 0 --burn 47.20
 
 # 4. Revenue confidence cycle (reads Supabase ledger)
-python -m apps.revenue_engine.main --mode once
+python apps/revenue-engine/main.py --mode once
 
 # 5. Dashboard
 uvicorn apps.api.main:app --reload --port 8000
@@ -75,7 +75,7 @@ Confirm in Supabase Table Editor:
 1. Create Stripe product; add `metadata.venture_id=ven_xxx` on subscriptions.
 2. Set `STRIPE_SECRET_KEY=sk_test_...` or live key.
 3. `pip install -e ".[revenue]"` if not installed.
-4. `python -m apps.revenue_engine.main --mode sync`
+4. `python apps/revenue-engine/main.py --mode sync`
 
 Until then:
 

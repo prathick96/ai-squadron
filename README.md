@@ -66,7 +66,7 @@ ai-squadron/
 
 ```bash
 pip install -e ".[dev,api]"
-python -m apps.revenue_engine.main --mode once
+python apps/revenue-engine/main.py --mode once
 pytest tests/test_revenue_day2.py -v
 uvicorn apps.api.main:app --reload --port 8000
 ```
@@ -158,7 +158,7 @@ The following stubs in the Day 1 scaffold need live API integration in Phase 1:
 - [ ] `packages/agents/content_team.py` → audio stub → wire ElevenLabs API
 - [ ] `packages/agents/content_team.py` → video stub → wire Remotion + FFmpeg
 - [ ] `packages/agents/content_team.py` → thumbnail stub → wire fal.ai Flux
-- [ ] `packages/agents/deployment_team.py` → Vercel Deploy API (SaaS)
+- [ ] `packages/agents/deployment_team.py` → Railway Deploy API (SaaS)
 - [ ] `packages/agents/deployment_team.py` → YouTube Data API v3 (media)
 - [ ] `packages/agents/growth_team.py` → YouTube Analytics API + PostHog
 - [ ] `apps/revenue-engine/main.py` → `_fetch_portfolio()` → wire Supabase + Stripe

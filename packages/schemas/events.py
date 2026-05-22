@@ -207,7 +207,7 @@ class StackSpec(BaseModel):
     backend: str   = "Python FastAPI"
     database: str  = "PostgreSQL"
     auth: str      = "Supabase Auth"
-    hosting: str   = "Vercel"
+    hosting: str   = "Railway"
 
 
 class Feature(BaseModel):

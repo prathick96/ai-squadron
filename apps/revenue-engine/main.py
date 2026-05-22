@@ -2,9 +2,9 @@
 apps/revenue-engine/main.py
 Revenue Engine — Day 2: sync revenue, scorecards, confidence report, SCALE/KILL.
 
-Run once:  python -m apps.revenue_engine.main --mode once
-Schedule:  python -m apps.revenue_engine.main --mode schedule
-Sync only: python -m apps.revenue_engine.main --mode sync
+Run once:  python apps/revenue-engine/main.py --mode once
+Schedule:  python apps/revenue-engine/main.py --mode schedule
+Sync only: python apps/revenue-engine/main.py --mode sync
 """
 from __future__ import annotations
 

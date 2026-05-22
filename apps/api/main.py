@@ -147,7 +147,7 @@ def get_confidence() -> dict:
             "forecast_p50_mrr_12mo": 300,
             "forecast_p90_mrr_12mo": 3000,
             "leading_indicators": {},
-            "recommended_actions": ["Run: python -m apps.revenue_engine.main --mode once"],
+            "recommended_actions": ["Run: python apps/revenue-engine/main.py --mode once"],
             "source": "fallback",
         }
 

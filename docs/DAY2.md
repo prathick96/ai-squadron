@@ -9,7 +9,7 @@ Day 2 operationalizes the direct answers from the revenue strategy: measure lead
 | DB migration | `packages/db/migrations/002_day2_revenue_confidence.sql` | scorecards, confidence reports, manual review queue |
 | Revenue package | `packages/revenue/` | Stripe/AdSense sync, scorecards, confidence, cycle |
 | Local store | `data/day2_store.json` | Works without Supabase (auto-created) |
-| Revenue Engine | `python -m apps.revenue_engine.main` | Daily sync + weekly confidence |
+| Revenue Engine | `python apps/revenue-engine/main.py` | Daily sync + weekly confidence |
 | API | `/api/confidence`, `/api/scorecards`, `/api/manual-review` | Command Center data |
 | Manual review | `manual_review_queue` + graph node | Human gate when QA exhausts retries |
 
@@ -17,7 +17,7 @@ Day 2 operationalizes the direct answers from the revenue strategy: measure lead
 
 ```bash
 # 1. Run revenue cycle (creates data/day2_store.json)
-python -m apps.revenue_engine.main --mode once
+python apps/revenue-engine/main.py --mode once
 
 # 2. Tests
 pytest tests/test_revenue_day2.py -v
@@ -37,7 +37,7 @@ You should see:
 
 | Day | Action |
 |-----|--------|
-| Daily | `python -m apps.revenue_engine.main --mode once` (or scheduler) |
+| Daily | `python apps/revenue-engine/main.py --mode once` (or scheduler) |
 | Monday | Review confidence report in Command Center |
 | On QA fail x3 | Resolve item in manual review queue |
 | On SCALE signal | Double distribution on that venture only |

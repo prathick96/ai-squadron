@@ -12,7 +12,7 @@
 | SaaS frontend | React 19 + Vite + TypeScript | Engineering agent output |
 | Command Center | React 19 + Vite + Recharts | War room dashboard |
 | Dashboard API | FastAPI + Uvicorn | Thin read layer over Supabase |
-| SaaS hosting | Vercel Hobby → Pro | Free start, scale on revenue |
+| SaaS hosting | Railway Hobby → Pro | Free start, scale on revenue |
 | Media APIs | YouTube Data API v3, TikTok Content Posting, Instagram Graph | Official only |
 | Voice | ElevenLabs (free tier 10k chars/mo) → paid | Human-likeness |
 | Video | Remotion + FFmpeg (local/cloud render) | Programmatic video |
@@ -45,8 +45,8 @@
 | 3 | Wire CEO: pytrends + Tavily; Supabase ventures write |
 | 4 | Wire Engineering: Claude → Vite repo template; real `vite build` in QA |
 | 5 | Wire Content: ElevenLabs + Remotion stub → real audio file |
-| 6 | Wire Deployment: Vercel token deploy; YouTube OAuth upload (unlisted tests) |
-| 7 | Command Center v1 on Vercel; connect Supabase read |
+| 6 | Wire Deployment: Railway token deploy; YouTube OAuth upload (unlisted tests) |
+| 7 | Command Center v1 on Railway; connect Supabase read |
 | 8 | Revenue Engine reads `revenue_ledger`; manual Stripe + AdSense entry |
 
 **Exit criteria:** One SaaS URL live, one unlisted video uploaded, dashboard shows agent logs from real run.
@@ -84,7 +84,7 @@
 ## Phase 5 — Scale organization (Month 13–24)
 
 - Hire or contract: editor, devops, compliance reviewer
-- Vercel Pro, Supabase Pro, paid ElevenLabs
+- Railway Pro, Supabase Pro, paid ElevenLabs
 - Sales outbound for top SaaS SKU only
 - 30–50 active ventures, 450-slot grid as funnel history
 
@@ -102,7 +102,7 @@
 
 1. `apps/api` — REST + WebSocket (mock data fallback)
 2. `apps/command-center` — Agent grid, revenue ticker, portfolio 450 grid, trend heatmap, risk panel
-3. Deploy API to Railway; UI to Vercel
+3. Deploy API and UI to Railway
 4. Wire Supabase realtime (optional) for agent_logs
 
 ## Commands reference
@@ -115,7 +115,7 @@ docker compose -f infra/docker-compose.yml up -d
 python -m apps.orchestrator.main --mode single
 
 # Revenue cycle
-python -m apps.revenue-engine.main --mode once
+python apps/revenue-engine/main.py --mode once
 
 # Dashboard API
 uvicorn apps.api.main:app --reload --port 8000

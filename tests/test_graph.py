@@ -145,7 +145,7 @@ MOCK_TECH_SPEC = {
     "venture_id": "ven_test_001",
     "product_type": "MICRO_SAAS",
     "stack": {"frontend": "React 19 + Vite", "backend": "Python FastAPI",
-              "database": "PostgreSQL", "auth": "Supabase Auth", "hosting": "Vercel"},
+              "database": "PostgreSQL", "auth": "Supabase Auth", "hosting": "Railway"},
     "features": [{"feature_id": "feat_001", "name": "Dashboard", "priority": "P0",
                   "user_story": "View metrics", "acceptance_criteria": ["Shows KPIs"],
                   "estimated_components": ["Dashboard"]}],

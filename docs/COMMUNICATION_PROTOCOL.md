@@ -124,7 +124,7 @@ WebSocket `/api/ws/live` pushes ticker + agent status deltas every 5s.
 | QA fail | Critique back to origin agent, max 3 loops |
 | Security violation | Pipeline stops; no deployment |
 | Manual review | Human notification via dashboard CRITICAL alert |
-| Kill signal | Venture status → KILLED; decommission Vercel project |
+| Kill signal | Venture status → KILLED; decommission Railway deployment |
 
 ## Versioning
 

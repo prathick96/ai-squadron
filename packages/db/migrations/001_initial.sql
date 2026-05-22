@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS platform_accounts (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     venture_id      VARCHAR(64) NOT NULL REFERENCES ventures(venture_id),
     platform        VARCHAR(32) NOT NULL
-                    CHECK (platform IN ('YOUTUBE','TIKTOK','INSTAGRAM','X','VERCEL')),
+                    CHECK (platform IN ('YOUTUBE','TIKTOK','INSTAGRAM','X','RAILWAY')),
     account_handle  VARCHAR(128),
     oauth_token_ref VARCHAR(256),  -- Supabase Vault secret reference (never plain text)
     is_active       BOOLEAN DEFAULT TRUE,

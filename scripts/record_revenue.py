@@ -47,7 +47,7 @@ def main() -> None:
     storage = "local JSON (data/day2_store.json)" if is_local_mode() else "Supabase revenue_ledger"
     print(f"Recorded | venture={args.venture_id} amount=${args.amount:.2f} burn=${args.burn:.2f}")
     print(f"Storage: {storage}")
-    print("Run: python -m apps.revenue_engine.main --mode once")
+    print("Run: python apps/revenue-engine/main.py --mode once")
 
 
 if __name__ == "__main__":
