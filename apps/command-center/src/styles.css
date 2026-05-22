@@ -1,0 +1,373 @@
+:root {
+  --bg: #0a0e14;
+  --panel: #121820;
+  --border: #1e2a3a;
+  --text: #e6edf5;
+  --muted: #7d8da6;
+  --accent: #3dffa8;
+  --warn: #ffb020;
+  --danger: #ff4d6a;
+  --info: #4dabf7;
+  font-family: "Outfit", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  background: radial-gradient(ellipse 80% 50% at 50% -20%, #1a2840 0%, var(--bg) 55%);
+}
+
+.mono {
+  font-family: "JetBrains Mono", monospace;
+}
+
+.app {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem 2rem;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+header p {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-top: 0.25rem;
+}
+
+.live-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.live-dot::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.grid-top {
+  grid-template-columns: 1fr 1fr 320px;
+}
+
+@media (max-width: 1200px) {
+  .grid-top {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+.panel h2 {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+
+.ticker {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.ticker .stat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.ticker .label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+
+.ticker .value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin-top: 0.2rem;
+}
+
+.ticker .value.negative {
+  color: var(--danger);
+}
+
+.ticker .value.positive {
+  color: var(--accent);
+}
+
+.agent-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.agent-table th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-table td {
+  padding: 0.45rem 0.5rem;
+  border-bottom: 1px solid #1a2230;
+  vertical-align: top;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.badge.RUNNING {
+  background: #1a3d2e;
+  color: var(--accent);
+}
+.badge.IDLE {
+  background: #1e2530;
+  color: var(--muted);
+}
+.badge.SUCCESS {
+  background: #1a3d2e;
+  color: var(--accent);
+}
+.badge.FAILED {
+  background: #3d1a24;
+  color: var(--danger);
+}
+
+.portfolio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14px, 1fr));
+  gap: 3px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.portfolio-cell {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  cursor: default;
+}
+
+.portfolio-cell.IDEATION {
+  background: #2a3344;
+}
+.portfolio-cell.DEVELOPMENT {
+  background: #3d5a80;
+}
+.portfolio-cell.QA {
+  background: var(--warn);
+}
+.portfolio-cell.LIVE {
+  background: var(--accent);
+}
+.portfolio-cell.SCALING {
+  background: #00c9a7;
+}
+.portfolio-cell.KILLED {
+  background: var(--danger);
+  opacity: 0.5;
+}
+
+.trend-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #1a2230;
+  font-size: 0.8rem;
+}
+
+.trend-bar {
+  flex: 1;
+  height: 6px;
+  background: #1e2a3a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.trend-bar fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+}
+
+.trend-bar-inner {
+  height: 100%;
+  background: linear-gradient(90deg, var(--info), var(--accent));
+  border-radius: 3px;
+}
+
+.alert {
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  margin-bottom: 0.4rem;
+  border-left: 3px solid var(--info);
+  background: #141c28;
+}
+
+.plan-list {
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.plan-list li {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #1a2230;
+  padding-left: 0.75rem;
+  position: relative;
+}
+
+.plan-list li::before {
+  content: "→";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-top: 0.5rem;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.legend span::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 0.3rem;
+  vertical-align: middle;
+}
+
+.legend .IDEATION::before {
+  background: #2a3344;
+}
+.legend .DEVELOPMENT::before {
+  background: #3d5a80;
+}
+.legend .LIVE::before {
+  background: var(--accent);
+}
+
+.confidence-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.5rem 2rem;
+  margin-bottom: 1rem;
+  padding: 0.85rem 1.1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.conf-score {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.conf-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.conf-value.tier-HIGH {
+  color: var(--accent);
+}
+.conf-value.tier-MEDIUM {
+  color: var(--warn);
+}
+.conf-value.tier-LOW {
+  color: var(--danger);
+}
+
+.conf-tier {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.conf-forecast,
+.conf-indicators {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.error-banner {
+  background: #3d1a24;
+  color: var(--danger);
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  margin-bottom: 1rem;
+}

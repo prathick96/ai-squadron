@@ -1,0 +1,208 @@
+{
+  "ventures": [
+    {
+      "venture_id": "ven_wedge_001",
+      "venture_type": "MICRO_SAAS",
+      "niche": "AI finance micro-tools",
+      "status": "DEVELOPMENT",
+      "go_decision": true,
+      "stripe_price_id": null,
+      "live_url": null,
+      "first_revenue_at": null,
+      "created_at": "2026-05-18T23:36:35.178839+00:00"
+    }
+  ],
+  "revenue_ledger": [
+    {
+      "venture_id": "ven_wedge_001",
+      "period_start": "2026-05-01",
+      "period_end": "2026-05-20",
+      "revenue_source": "STRIPE",
+      "amount_usd": 0.0,
+      "burn_usd": 47.2
+    },
+    {
+      "venture_id": "ven_wedge_001",
+      "period_start": "2026-05-01",
+      "period_end": "2026-05-20",
+      "revenue_source": "ADSENSE",
+      "amount_usd": 120.5,
+      "burn_usd": 15.0
+    },
+    {
+      "venture_id": "ven_wedge_002",
+      "period_start": "2026-05-01",
+      "period_end": "2026-05-20",
+      "revenue_source": "ADSENSE",
+      "amount_usd": 450.0,
+      "burn_usd": 50.0
+    }
+  ],
+  "venture_scorecards": [
+    {
+      "venture_id": "ven_wedge_001",
+      "period_start": "2026-05-12",
+      "period_end": "2026-05-19",
+      "mrr_usd": 0.0,
+      "burn_usd": 47.2,
+      "gross_margin_pct": 0.0,
+      "organic_visits_monthly": 0,
+      "retention_30d_pct": null,
+      "qa_first_pass_rate_pct": 0.0,
+      "days_live": 0,
+      "platform_monetization": "NONE",
+      "ltv_usd": null,
+      "cac_usd": null,
+      "signal": "HOLD",
+      "signal_reason": "Early stage \u2014 gather leading indicators"
+    },
+    {
+      "venture_id": "ven_wedge_001",
+      "period_start": "2026-05-13",
+      "period_end": "2026-05-20",
+      "mrr_usd": 120.5,
+      "burn_usd": 62.2,
+      "gross_margin_pct": 48.4,
+      "organic_visits_monthly": 0,
+      "retention_30d_pct": null,
+      "qa_first_pass_rate_pct": 0.0,
+      "days_live": 1,
+      "platform_monetization": "NONE",
+      "ltv_usd": null,
+      "cac_usd": null,
+      "signal": "HOLD",
+      "signal_reason": "Early stage \u2014 gather leading indicators"
+    }
+  ],
+  "confidence_reports": [
+    {
+      "report_week": "2026-05-18",
+      "confidence_score": 20,
+      "confidence_tier": "LOW",
+      "mrr_current_usd": 120.5,
+      "burn_current_usd": 62.2,
+      "burn_earn_ratio": 0.5162,
+      "forecast_p10_mrr_12mo": 30.12,
+      "forecast_p50_mrr_12mo": 120.5,
+      "forecast_p90_mrr_12mo": 255.0,
+      "leading_indicators": {
+        "qa_first_pass_rate_pct": 0.0,
+        "ventures_with_revenue": 1,
+        "live_venture_count": 1,
+        "burn_earn_ratio": 0.5162,
+        "mrr_total_usd": 120.5,
+        "burn_total_usd": 62.2,
+        "manual_review_pending": 0,
+        "scale_signals": 0,
+        "kill_signals": 0,
+        "months_elapsed": 0
+      },
+      "recommended_actions": [
+        "Raise QA first-pass rate above 60% before launching venture #2.",
+        "Do not increase MAX_PARALLEL_PIPELINES until confidence tier reaches MEDIUM."
+      ],
+      "scale_ventures": [],
+      "kill_ventures": []
+    }
+  ],
+  "manual_review_queue": [],
+  "qa_reports": [],
+  "revenue_sync_runs": [
+    {
+      "source": "STRIPE",
+      "status": "SUCCESS",
+      "rows_upserted": 1,
+      "error_message": null,
+      "started_at": "2026-05-18T23:36:37.161922+00:00",
+      "completed_at": "2026-05-18T23:36:37.161922+00:00"
+    },
+    {
+      "source": "ADSENSE",
+      "status": "SUCCESS",
+      "rows_upserted": 0,
+      "error_message": null,
+      "started_at": "2026-05-18T23:36:37.190544+00:00",
+      "completed_at": "2026-05-18T23:36:37.190544+00:00"
+    },
+    {
+      "source": "STRIPE",
+      "status": "SUCCESS",
+      "rows_upserted": 1,
+      "error_message": null,
+      "started_at": "2026-05-18T23:45:07.536032+00:00",
+      "completed_at": "2026-05-18T23:45:07.536032+00:00"
+    },
+    {
+      "source": "ADSENSE",
+      "status": "SUCCESS",
+      "rows_upserted": 0,
+      "error_message": null,
+      "started_at": "2026-05-18T23:45:07.559310+00:00",
+      "completed_at": "2026-05-18T23:45:07.559310+00:00"
+    },
+    {
+      "source": "STRIPE",
+      "status": "SUCCESS",
+      "rows_upserted": 1,
+      "error_message": null,
+      "started_at": "2026-05-19T23:51:52.522802+00:00",
+      "completed_at": "2026-05-19T23:51:52.522802+00:00"
+    },
+    {
+      "source": "ADSENSE",
+      "status": "SUCCESS",
+      "rows_upserted": 0,
+      "error_message": null,
+      "started_at": "2026-05-19T23:51:52.555782+00:00",
+      "completed_at": "2026-05-19T23:51:52.555782+00:00"
+    },
+    {
+      "source": "STRIPE",
+      "status": "SUCCESS",
+      "rows_upserted": 1,
+      "error_message": null,
+      "started_at": "2026-05-20T00:02:37.801353+00:00",
+      "completed_at": "2026-05-20T00:02:37.801353+00:00"
+    },
+    {
+      "source": "ADSENSE",
+      "status": "SUCCESS",
+      "rows_upserted": 0,
+      "error_message": null,
+      "started_at": "2026-05-20T00:02:37.822854+00:00",
+      "completed_at": "2026-05-20T00:02:37.822854+00:00"
+    },
+    {
+      "source": "STRIPE",
+      "status": "SUCCESS",
+      "rows_upserted": 1,
+      "error_message": null,
+      "started_at": "2026-05-20T00:10:35.842666+00:00",
+      "completed_at": "2026-05-20T00:10:35.842666+00:00"
+    },
+    {
+      "source": "ADSENSE",
+      "status": "SUCCESS",
+      "rows_upserted": 0,
+      "error_message": null,
+      "started_at": "2026-05-20T00:10:35.863060+00:00",
+      "completed_at": "2026-05-20T00:10:35.863060+00:00"
+    },
+    {
+      "source": "STRIPE",
+      "status": "SUCCESS",
+      "rows_upserted": 1,
+      "error_message": null,
+      "started_at": "2026-05-20T00:14:13.647843+00:00",
+      "completed_at": "2026-05-20T00:14:13.647843+00:00"
+    },
+    {
+      "source": "ADSENSE",
+      "status": "SUCCESS",
+      "rows_upserted": 2,
+      "error_message": null,
+      "started_at": "2026-05-20T00:14:13.692189+00:00",
+      "completed_at": "2026-05-20T00:14:13.692189+00:00"
+    }
+  ]
+}
