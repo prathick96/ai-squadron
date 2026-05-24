@@ -18,6 +18,8 @@ from packages.revenue.store import _STORE_PATH, _load_local, _save_local, is_loc
 @pytest.fixture(autouse=True)
 def isolated_store(tmp_path, monkeypatch):
     """Use temp JSON store for each test."""
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     store_file = tmp_path / "day2_store.json"
     monkeypatch.setattr("packages.revenue.store._STORE_PATH", store_file)
     _save_local({
