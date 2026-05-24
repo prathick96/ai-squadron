@@ -6,9 +6,7 @@ Usage:
   from apps.orchestrator.graph import build_squadron_graph
   graph = build_squadron_graph(department="PRODUCT")   # or "MEDIA"
 
-For backward compatibility, build_squadron_graph() with no args defaults to
-running both pipelines in sequence (research + CEO shared, then branch).
-In practice, callers should pass --department to main.py to select one.
+Callers pass department="PRODUCT", "MEDIA", or "AUTO" to main.py to select the pipeline.
 """
 from __future__ import annotations
 
@@ -243,6 +241,3 @@ async def _manual_review_node(state: AgentState) -> AgentState:
         pass
     return {**state, "pipeline_stage": "MANUAL_REVIEW"}
 
-
-# Module-level graph for backward compatibility
-squadron_graph = build_squadron_graph("AUTO")
