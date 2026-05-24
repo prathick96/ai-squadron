@@ -3,13 +3,14 @@
 #
 # DESIGN RATIONALE — why each line is here:
 #
-# [build]
-#   No buildCommand.  Railpack's default `pip install .` runs in the *install*
-#   stage whose site-packages ARE included in the deploy image.  buildCommand
-#   runs in the *build* stage whose packages are NOT reliably carried to the
-#   deploy image — that is what caused "No module named uvicorn".  Since
-#   fastapi, uvicorn, and stripe are now in base dependencies (pyproject.toml),
-#   the default install covers everything without any buildCommand.
+# [build] buildCommand
+#   Railpack 0.23 does NOT auto-run `pip install .` — buildCommand IS the
+#   pip install step.  Without it, Railpack installs only the Python interpreter
+#   (via mise) and copies zero packages; runtime gets "No module named X".
+#   Non-editable (no -e): packages go directly into site-packages with no .pth
+#   path dependency, so they survive unchanged in the runtime image.
+#   fastapi, uvicorn, and stripe are in base deps so `pip install .` covers
+#   everything without needing extras.
 #
 # [deploy] startCommand
 #   `python -m uvicorn` instead of bare `uvicorn`: mise's Python bin/ dir is
@@ -17,12 +18,15 @@
 #   `python -m uvicorn` uses whatever Python is on PATH, which always resolves
 #   to the interpreter that owns the installed packages.
 #
-#   --loop asyncio: uvloop (installed by uvicorn[standard]) crashes inside
-#   Railway's container seccomp profile.  We no longer install uvicorn[standard]
-#   so uvloop is absent, but the flag is kept as an explicit safety net.
+#   --loop asyncio: uvloop (from uvicorn[standard]) crashes inside Railway's
+#   container seccomp profile.  We install plain uvicorn (no [standard]) so
+#   uvloop is absent, but the flag is kept as an explicit safety net.
 #
 #   --http h11: httptools (also from uvicorn[standard]) is absent; h11 is the
 #   pure-Python fallback that is always available.
+
+[build]
+buildCommand = "pip install ."
 
 [deploy]
 startCommand = "python -m uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --loop asyncio --http h11"
