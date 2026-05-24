@@ -9,7 +9,7 @@
 buildCommand = "pip install '.[api,revenue]'"
 
 [deploy]
-startCommand = "uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --loop asyncio --http h11"
+startCommand = "python -m uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --loop asyncio --http h11"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
