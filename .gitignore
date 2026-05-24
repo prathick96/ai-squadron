@@ -71,6 +71,9 @@ docker-compose.override.yml
 # Local development data
 *.sqlite3
 
+# Generated SaaS builds (Engineering agent output — never commit)
+builds/
+
 # Optional: ignore macOS Finder attributes
 .AppleDouble/
 .LSOverride
