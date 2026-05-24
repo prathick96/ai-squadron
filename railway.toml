@@ -1,12 +1,28 @@
 # railway.toml — AI Squadron deployment config
 # Railway documentation: https://docs.railway.app/reference/config-as-code
 #
-# pyproject.toml lives at the repo root — no rootDirectory needed.
-# Non-editable install avoids the editable-install .pth path-baking issue
-# that causes "module not found" crashes in Railway's multi-stage builds.
-
-[build]
-buildCommand = "pip install '.[api,revenue]'"
+# DESIGN RATIONALE — why each line is here:
+#
+# [build]
+#   No buildCommand.  Railpack's default `pip install .` runs in the *install*
+#   stage whose site-packages ARE included in the deploy image.  buildCommand
+#   runs in the *build* stage whose packages are NOT reliably carried to the
+#   deploy image — that is what caused "No module named uvicorn".  Since
+#   fastapi, uvicorn, and stripe are now in base dependencies (pyproject.toml),
+#   the default install covers everything without any buildCommand.
+#
+# [deploy] startCommand
+#   `python -m uvicorn` instead of bare `uvicorn`: mise's Python bin/ dir is
+#   not on PATH in the deploy image, so the uvicorn entry-point script fails.
+#   `python -m uvicorn` uses whatever Python is on PATH, which always resolves
+#   to the interpreter that owns the installed packages.
+#
+#   --loop asyncio: uvloop (installed by uvicorn[standard]) crashes inside
+#   Railway's container seccomp profile.  We no longer install uvicorn[standard]
+#   so uvloop is absent, but the flag is kept as an explicit safety net.
+#
+#   --http h11: httptools (also from uvicorn[standard]) is absent; h11 is the
+#   pure-Python fallback that is always available.
 
 [deploy]
 startCommand = "python -m uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --loop asyncio --http h11"

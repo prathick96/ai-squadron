@@ -8,16 +8,20 @@ version = "0.1.0"
 description = "AI Squadron — Autonomous venture & media orchestration system"
 requires-python = ">=3.11"
 dependencies = [
+    # --- AI / orchestration ---
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
     "langchain-google-genai>=2.0.0",
     "anthropic>=0.40.0",
     "google-generativeai>=0.8.0",
     "google-genai>=1.0.0",
+    # --- Data / validation ---
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
+    # --- Storage / messaging ---
     "redis>=5.0.0",
     "supabase>=2.10.0",
+    # --- Utilities ---
     "python-dotenv>=1.0.0",
     "httpx>=0.27.0",
     "tenacity>=9.0.0",
@@ -25,16 +29,17 @@ dependencies = [
     "pytrends>=4.9.2",
     "tavily-python>=0.5.0",
     "apscheduler>=3.10.0",
+    # --- Web serving (always required to run the API) ---
+    # uvicorn WITHOUT [standard]: the [standard] extras pull in uvloop (crashes
+    # inside Railway's container seccomp) and httptools (redundant because we
+    # force --http h11).  Plain uvicorn + asyncio event loop is stable everywhere.
+    "fastapi>=0.115.0",
+    "uvicorn>=0.32.0",
+    # --- Revenue ---
+    "stripe>=11.0.0",
 ]
 
 [project.optional-dependencies]
-api = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
-]
-revenue = [
-    "stripe>=11.0.0",
-]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
@@ -50,7 +55,7 @@ python_files = ["test_*.py"]
 python_functions = ["test_*"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"
 line-length = 100
 
 [tool.setuptools.packages.find]
