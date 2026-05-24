@@ -28,7 +28,7 @@ from packages.tools.elevenlabs_client import (
 
 log = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _build_dir(venture_id: str) -> Path:

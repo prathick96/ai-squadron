@@ -28,7 +28,7 @@ from packages.state.agent_state import AgentState, DeploymentReceipt, append_eve
 
 log = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _RAILWAY_TIMEOUT = 180   # seconds
 
 
