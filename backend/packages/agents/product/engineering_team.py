@@ -38,7 +38,7 @@ from packages.tools.llm import call_llm
 log = logging.getLogger(__name__)
 
 # Repo root: packages/agents/product/ → up 3 levels
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 
 # ---------------------------------------------------------------------------
 # Fixed scaffold — written on every initial build, never by the LLM
