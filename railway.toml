@@ -3,14 +3,12 @@
 #
 # DESIGN RATIONALE — why each line is here:
 #
-# [build] buildCommand
-#   Railpack 0.23 does NOT auto-run `pip install .` — buildCommand IS the
-#   pip install step.  Without it, Railpack installs only the Python interpreter
-#   (via mise) and copies zero packages; runtime gets "No module named X".
-#   Non-editable (no -e): packages go directly into site-packages with no .pth
-#   path dependency, so they survive unchanged in the runtime image.
-#   fastapi, uvicorn, and stripe are in base deps so `pip install .` covers
-#   everything without needing extras.
+# No [build] buildCommand:
+#   Railpack 0.23 does NOT recognize pyproject.toml as a pip install trigger.
+#   It only shows Python in its Packages plan — zero pip packages — so
+#   buildCommand is silently ignored (no build phase exists to attach to).
+#   Adding requirements.txt is the fix: Railpack 0.23 auto-detects it and
+#   adds a `pip install -r requirements.txt` step to the plan automatically.
 #
 # [deploy] startCommand
 #   `python -m uvicorn` instead of bare `uvicorn`: mise's Python bin/ dir is
@@ -24,9 +22,6 @@
 #
 #   --http h11: httptools (also from uvicorn[standard]) is absent; h11 is the
 #   pure-Python fallback that is always available.
-
-[build]
-buildCommand = "pip install ."
 
 [deploy]
 startCommand = "python -m uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --loop asyncio --http h11"
