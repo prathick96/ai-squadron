@@ -55,8 +55,39 @@ export type ManualReviewItem = {
   created_at?: string;
 };
 
+export type PipelineRunStatus =
+  | "STARTED"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "MANUAL_REVIEW";
+
+export type PipelineRun = {
+  run_id: string;
+  venture_id: string;
+  department: "PRODUCT" | "MEDIA" | "AUTO";
+  status: PipelineRunStatus;
+  current_stage: string;
+  started_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  event_count: number;
+  recent_events: Record<string, unknown>[];
+  last_error: string | null;
+};
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`);
+  if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return res.json() as Promise<T>;
 }
@@ -76,12 +107,24 @@ export const api = {
       coverage_pct: number;
       updated_at: string;
     }>("/api/trends"),
-  security: () => get<{ alerts: { severity: string; platform: string; message: string; at: string }[] }>(
-    "/api/security/alerts",
-  ),
+  security: () =>
+    get<{ alerts: { severity: string; platform: string; message: string; at: string }[] }>(
+      "/api/security/alerts",
+    ),
   confidence: () => get<ConfidenceReport>("/api/confidence"),
-  scorecards: () => get<{ scorecards: Record<string, unknown>[]; count: number }>("/api/scorecards"),
-  manualReview: () => get<{ items: ManualReviewItem[]; count: number }>("/api/manual-review"),
-  runRevenueCycle: () =>
-    fetch(`${API_BASE}/api/revenue/run-cycle`, { method: "POST" }).then((r) => r.json()),
+  scorecards: () =>
+    get<{ scorecards: Record<string, unknown>[]; count: number }>("/api/scorecards"),
+  manualReview: () =>
+    get<{ items: ManualReviewItem[]; count: number }>("/api/manual-review"),
+  runRevenueCycle: () => post<unknown>("/api/revenue/run-cycle", {}),
+
+  // Week 5 — pipeline control
+  pipelineRun: (department: "PRODUCT" | "MEDIA" | "AUTO" = "AUTO", venture_id?: string) =>
+    post<{ run_id: string; venture_id: string; status: string }>("/api/pipeline/run", {
+      department,
+      venture_id: venture_id ?? null,
+    }),
+  pipelineStatus: (run_id: string) => get<PipelineRun>(`/api/pipeline/${run_id}`),
+  pipelineRecent: () =>
+    get<{ runs: PipelineRun[]; count: number }>("/api/pipeline/recent"),
 };
