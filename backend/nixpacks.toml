@@ -1,8 +1,0 @@
-# backend/nixpacks.toml — Nixpacks build config for the AI Squadron API
-#
-# Nixpacks auto-detects Python via pyproject.toml but defaults to
-# `pip install .` which skips optional extras (fastapi, uvicorn).
-# This override installs [api] + [revenue] so the FastAPI server starts.
-
-[phases.install]
-cmds = ["pip install -e '.[api,revenue]'"]

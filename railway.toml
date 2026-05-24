@@ -7,6 +7,9 @@
 
 [build]
 rootDirectory = "backend"
+# Railpack 0.23+ ignores nixpacks.toml — must set buildCommand here.
+# Default `pip install .` skips [api] and [revenue] extras (no uvicorn/fastapi/stripe).
+buildCommand = "pip install -e '.[api,revenue]'"
 
 [deploy]
 startCommand = "uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT"
