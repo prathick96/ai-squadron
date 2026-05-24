@@ -298,6 +298,22 @@ class BuildCompletePayload(BaseModel):
     retry_patches_applied: list[str] = []
 
 
+class VoiceReadyPayload(BaseModel):
+    venture_id: str = ""
+    duration_sec: float = 0.0
+    voice_model: str = ""
+    human_likeness_score: float = 0.0
+    provider: str = "ElevenLabs"
+
+
+class VideoReadyPayload(BaseModel):
+    venture_id: str = ""
+    duration_sec: float = 0.0
+    resolution: str = "1920x1080"
+    size_mb: float = 0.0
+    provider: str = "FFmpeg"
+
+
 class AudioAsset(BaseModel):
     file_path: str
     duration_sec: float

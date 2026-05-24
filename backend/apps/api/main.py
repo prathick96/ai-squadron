@@ -1,6 +1,6 @@
 """
 apps/api/main.py
-Command Center API — read-only dashboard + manual review actions.
+Command Center API — read-only dashboard + manual review actions + pipeline trigger.
 
 Run: uvicorn apps.api.main:app --reload --port 8000
 """
@@ -12,8 +12,9 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Literal
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -32,13 +33,14 @@ from apps.api.data.revenue_dashboard import (
     live_revenue_plan,
     live_revenue_summary,
 )
+from packages.orchestrator.runner import RunRecord, registry
 
 log = logging.getLogger("squadron.api")
 
 app = FastAPI(
     title="AI Squadron Command Center API",
-    version="0.2.0",
-    description="Agent health, revenue truth, confidence forecasts, manual review queue.",
+    version="0.3.0",
+    description="Agent health, revenue truth, confidence forecasts, manual review queue, pipeline control.",
 )
 
 app.add_middleware(
@@ -50,15 +52,88 @@ app.add_middleware(
 )
 
 
+# ---------------------------------------------------------------------------
+# Request / response models
+# ---------------------------------------------------------------------------
+
 class ReviewResolveBody(BaseModel):
     status: str  # APPROVED | REJECTED | DEFERRED
     notes: str = ""
 
 
+class PipelineRunBody(BaseModel):
+    department: Literal["PRODUCT", "MEDIA", "AUTO"] = "AUTO"
+    venture_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _run_to_dict(rec: RunRecord) -> dict:
+    return {
+        "run_id": rec.run_id,
+        "venture_id": rec.venture_id,
+        "department": rec.department,
+        "status": rec.status,
+        "current_stage": rec.current_stage,
+        "started_at": rec.started_at,
+        "updated_at": rec.updated_at,
+        "completed_at": rec.completed_at,
+        "event_count": len(rec.recent_events),
+        "recent_events": rec.recent_events[-5:],
+        "last_error": rec.last_error,
+    }
+
+
+async def _run_pipeline_background(state: dict, department: str) -> None:
+    """Background task: stream the full pipeline and push updates to the registry."""
+    from apps.orchestrator.graph import build_squadron_graph
+    from packages.db.pipeline import begin_pipeline_run, complete_pipeline_run, persist_event_log
+
+    run_id = state["run_id"]
+    venture_id = state["venture_id"]
+
+    begin_pipeline_run(run_id, venture_id)
+    final_state: dict = dict(state)
+
+    try:
+        graph = build_squadron_graph(department)
+
+        # Stream node-by-node: each chunk is {node_name: state_updates}
+        async for chunk in graph.astream(state, stream_mode="updates"):
+            for node_name, updates in (chunk or {}).items():
+                if isinstance(node_name, str) and not node_name.startswith("__"):
+                    registry.update_stage(run_id, node_name)
+                    if isinstance(updates, dict):
+                        final_state.update(updates)
+
+        stage = final_state.get("pipeline_stage", "END")
+        error = final_state.get("last_error")
+        if stage == "MANUAL_REVIEW":
+            status = "MANUAL_REVIEW"
+        elif error:
+            status = "FAILED"
+        else:
+            status = "COMPLETED"
+
+        for event in (final_state.get("event_log") or [])[-10:]:
+            registry.append_event(run_id, event)
+
+        registry.complete(run_id, stage, status, error)
+        persist_event_log(final_state)
+        complete_pipeline_run(run_id, venture_id, stage, status, error)
+
+    except Exception as exc:
+        log.exception("[PIPELINE_BG] run_id=%s failed: %s", run_id, exc)
+        registry.complete(run_id, "FAILED", "FAILED", str(exc))
+        from packages.db.pipeline import complete_pipeline_run as _cp
+        _cp(run_id, venture_id, "FAILED", "FAILED", str(exc))
+
+
 def _try_supabase_agents() -> list[dict] | None:
     try:
         from packages.db.pipeline import fetch_recent_agent_logs
-
         rows = fetch_recent_agent_logs(50)
         return rows if rows else None
     except Exception as exc:
@@ -68,7 +143,6 @@ def _try_supabase_agents() -> list[dict] | None:
 
 def _portfolio_from_supabase() -> dict | None:
     from packages.db.pipeline import fetch_ventures_for_portfolio
-
     ventures = fetch_ventures_for_portfolio(450)
     if not ventures:
         return None
@@ -100,15 +174,19 @@ def _revenue_payload() -> tuple[dict, str]:
     return revenue_summary(), "mock"
 
 
+# ---------------------------------------------------------------------------
+# Dashboard endpoints (unchanged from Week 4)
+# ---------------------------------------------------------------------------
+
 @app.get("/api/health")
 def health() -> dict:
     from packages.revenue.store import is_local_mode
-
     return {
         "status": "ok",
         "service": "command-center-api",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "storage": "local_json" if is_local_mode() else "supabase",
+        "active_pipeline_runs": registry.active_count(),
     }
 
 
@@ -155,7 +233,6 @@ def get_confidence() -> dict:
 @app.get("/api/scorecards")
 def get_scorecards() -> dict:
     from packages.revenue.store import list_scorecards
-
     cards = list_scorecards()
     return {"scorecards": cards, "count": len(cards)}
 
@@ -163,7 +240,6 @@ def get_scorecards() -> dict:
 @app.get("/api/manual-review")
 def get_manual_review(status: str | None = "PENDING") -> dict:
     from packages.revenue.store import list_manual_reviews
-
     items = list_manual_reviews(status=status)
     return {"items": items, "count": len(items)}
 
@@ -171,7 +247,6 @@ def get_manual_review(status: str | None = "PENDING") -> dict:
 @app.patch("/api/manual-review/{review_id}")
 def resolve_review(review_id: str, body: ReviewResolveBody) -> dict:
     from packages.revenue.store import resolve_manual_review
-
     if body.status not in ("APPROVED", "REJECTED", "DEFERRED"):
         raise HTTPException(400, "status must be APPROVED, REJECTED, or DEFERRED")
     ok = resolve_manual_review(review_id, body.status, body.notes)
@@ -182,9 +257,7 @@ def resolve_review(review_id: str, body: ReviewResolveBody) -> dict:
 
 @app.post("/api/revenue/run-cycle")
 async def trigger_cycle() -> dict:
-    """Trigger Day 2 revenue cycle on demand (dev convenience)."""
     from packages.revenue.cycle import run_day2_cycle
-
     return await run_day2_cycle()
 
 
@@ -208,6 +281,51 @@ def get_security_alerts() -> dict:
     return {"alerts": security_alerts()}
 
 
+# ---------------------------------------------------------------------------
+# Pipeline control endpoints (Week 5)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/pipeline/run")
+async def trigger_pipeline(body: PipelineRunBody, background_tasks: BackgroundTasks) -> dict:
+    """
+    Launch a full pipeline run asynchronously.
+    Returns immediately with {run_id, venture_id, status: "STARTED"}.
+    Poll GET /api/pipeline/{run_id} for live status.
+    """
+    from packages.state.agent_state import init_state
+
+    state = init_state(body.venture_id)
+    run_id = state["run_id"]
+    venture_id = state["venture_id"]
+
+    registry.start(run_id, venture_id, body.department)
+    background_tasks.add_task(_run_pipeline_background, state, body.department)
+
+    log.info("[PIPELINE_API] Launched run_id=%s venture_id=%s dept=%s",
+             run_id, venture_id, body.department)
+    return {"run_id": run_id, "venture_id": venture_id, "status": "STARTED"}
+
+
+@app.get("/api/pipeline/recent")
+def get_recent_pipelines() -> dict:
+    """List the 20 most recent pipeline runs (newest first)."""
+    runs = registry.list_recent(20)
+    return {"runs": [_run_to_dict(r) for r in runs], "count": len(runs)}
+
+
+@app.get("/api/pipeline/{run_id}")
+def get_pipeline_status(run_id: str) -> dict:
+    """Return live status for a specific pipeline run."""
+    rec = registry.get(run_id)
+    if rec is None:
+        raise HTTPException(404, f"Run '{run_id}' not found (may have expired after restart)")
+    return _run_to_dict(rec)
+
+
+# ---------------------------------------------------------------------------
+# WebSocket — live ticker (updated in Week 5 to include pipeline state)
+# ---------------------------------------------------------------------------
+
 @app.websocket("/api/ws/live")
 async def ws_live(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -219,11 +337,25 @@ async def ws_live(websocket: WebSocket) -> None:
                 confidence_score = conf.get("confidence_score", 0)
             except Exception:
                 confidence_score = 0
+
+            active_runs = [
+                {
+                    "run_id": r.run_id,
+                    "venture_id": r.venture_id,
+                    "department": r.department,
+                    "stage": r.current_stage,
+                    "status": r.status,
+                }
+                for r in registry.list_recent(5)
+                if r.status in ("STARTED", "RUNNING")
+            ]
+
             payload = {
                 "type": "tick",
                 "revenue": rev,
                 "confidence_score": confidence_score,
                 "agents_running": sum(1 for a in agent_grid() if a["status"] == "RUNNING"),
+                "active_pipeline_runs": active_runs,
             }
             await websocket.send_text(json.dumps(payload))
             await asyncio.sleep(5)

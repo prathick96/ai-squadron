@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timezone
 
 from packages.db.client import log_agent_event
-from packages.schemas.events import AgentID, EventType, make_event
+from packages.schemas.events import AgentID, EventType, VideoReadyPayload, make_event
 from packages.state.agent_state import AgentState, VideoPackage, append_event, update_stage
 
 log = logging.getLogger(__name__)
@@ -70,7 +70,13 @@ async def video_agent_node(state: AgentState) -> AgentState:
 
     event = make_event(
         EventType.VIDEO_READY, AgentID.VIDEO_AGENT, AgentID.THUMBNAIL_AGENT,
-        {}, run_id, venture_id, "VIDEO_NODE",
+        VideoReadyPayload(
+            venture_id=venture_id,
+            duration_sec=video_package["duration_sec"],
+            resolution=video_package.get("resolution", "1920x1080"),
+            size_mb=video_package.get("size_mb", 0.0),
+        ),
+        run_id, venture_id, "VIDEO_NODE",
     )
 
     log_agent_event(run_id, venture_id, "VIDEO_AGENT", "SUCCESS",

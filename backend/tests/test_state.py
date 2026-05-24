@@ -11,7 +11,7 @@ def test_init_state_defaults():
     state = init_state()
     assert state["run_id"] is not None
     assert state["venture_id"].startswith("ven_")
-    assert state["pipeline_stage"] == "CEO_NODE"
+    assert state["pipeline_stage"] == "RESEARCH_NODE"
     assert state["qa_retry_count"] == 0
     assert state["qa_max_retries"] == 3
     assert state["mrr_current"] == 0.0
@@ -29,7 +29,7 @@ def test_update_stage():
     state  = init_state()
     state2 = update_stage(state, "PRODUCT_NODE")
     assert state2["pipeline_stage"] == "PRODUCT_NODE"
-    assert state["pipeline_stage"] == "CEO_NODE"   # original not mutated
+    assert state["pipeline_stage"] == "RESEARCH_NODE"   # original not mutated
 
 
 def test_append_event():
@@ -67,4 +67,4 @@ def test_state_immutability():
     original_id = id(original)
     modified = update_stage(original, "QA_NODE")
     assert id(modified) != original_id
-    assert original["pipeline_stage"] == "CEO_NODE"
+    assert original["pipeline_stage"] == "RESEARCH_NODE"

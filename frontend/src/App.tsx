@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   type AgentRow,
   type ConfidenceReport,
   type ManualReviewItem,
+  type PipelineRun,
   type PortfolioSlot,
   type RevenueSummary,
 } from "./api";
@@ -14,6 +15,159 @@ function formatUsd(n: number) {
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(n);
+}
+
+function elapsed(iso: string): string {
+  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+}
+
+const PRODUCT_STAGES = [
+  "RESEARCH_NODE", "CEO_NODE", "PRODUCT_VP_NODE", "PRODUCT_MANAGER_NODE",
+  "ENGINEERING_NODE", "QA_TECHNICAL_NODE", "LEGAL_NODE", "SECURITY_NODE",
+  "ACCOUNT_DISTRIBUTION_NODE", "DEPLOYMENT_NODE", "MARKETING_SEO_NODE", "PRODUCT_GROWTH_NODE",
+];
+
+const MEDIA_STAGES = [
+  "RESEARCH_NODE", "CEO_NODE", "MEDIA_VP_NODE", "SCRIPT_NODE", "VOICE_NODE",
+  "VIDEO_NODE", "THUMBNAIL_NODE", "SEO_METADATA_NODE", "QA_COMPLIANCE_NODE",
+  "LEGAL_NODE", "SECURITY_NODE", "ACCOUNT_DISTRIBUTION_NODE",
+  "PUBLISHING_NODE", "ANALYTICS_NODE", "ANTI_BAN_NODE", "MEDIA_GROWTH_NODE",
+];
+
+function stageIndex(run: PipelineRun): number {
+  const stages = run.department === "MEDIA" ? MEDIA_STAGES : PRODUCT_STAGES;
+  const idx = stages.indexOf(run.current_stage);
+  return idx >= 0 ? idx : 0;
+}
+
+function PipelineStatusBadge({ status }: { status: PipelineRun["status"] }) {
+  const colors: Record<string, string> = {
+    STARTED: "#888",
+    RUNNING: "#4af",
+    COMPLETED: "#4c4",
+    FAILED: "#f44",
+    MANUAL_REVIEW: "#fa4",
+  };
+  return (
+    <span
+      style={{
+        background: colors[status] ?? "#888",
+        color: "#000",
+        borderRadius: 4,
+        padding: "1px 6px",
+        fontSize: "0.7rem",
+        fontWeight: 700,
+        fontFamily: "monospace",
+      }}
+    >
+      {status}
+    </span>
+  );
+}
+
+function PipelineProgressBar({ run }: { run: PipelineRun }) {
+  const stages = run.department === "MEDIA" ? MEDIA_STAGES : PRODUCT_STAGES;
+  const idx = stageIndex(run);
+  const pct = run.status === "COMPLETED" ? 100 : Math.round(((idx + 1) / stages.length) * 100);
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginBottom: 3 }}>
+        {run.current_stage.replace(/_NODE$/, "").replace(/_/g, " ")} — {pct}%
+      </div>
+      <div style={{ background: "#222", borderRadius: 3, height: 6, overflow: "hidden" }}>
+        <div
+          style={{
+            width: `${pct}%`,
+            height: "100%",
+            background: run.status === "FAILED" ? "#f44" :
+                        run.status === "MANUAL_REVIEW" ? "#fa4" : "var(--accent)",
+            transition: "width 0.4s ease",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ActiveRunCard({ run, onRefresh }: { run: PipelineRun; onRefresh: () => void }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const elapsedStr = elapsed(run.started_at);
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: 6,
+        padding: "10px 14px",
+        marginBottom: 8,
+        background: "#111",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span className="mono" style={{ fontSize: "0.78rem" }}>
+          {run.venture_id}
+        </span>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <span style={{ fontSize: "0.72rem", color: "var(--muted)" }}>{elapsedStr}</span>
+          <PipelineStatusBadge status={run.status} />
+          <span
+            style={{
+              fontSize: "0.72rem",
+              background: "#1a2a1a",
+              color: "var(--accent)",
+              padding: "1px 5px",
+              borderRadius: 3,
+              fontFamily: "monospace",
+            }}
+          >
+            {run.department}
+          </span>
+        </div>
+      </div>
+
+      <PipelineProgressBar run={run} />
+
+      {run.last_error && (
+        <div
+          style={{
+            marginTop: 6,
+            fontSize: "0.72rem",
+            color: "#f66",
+            fontFamily: "monospace",
+          }}
+        >
+          ⚠ {run.last_error.slice(0, 120)}
+        </div>
+      )}
+
+      {run.recent_events.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          {run.recent_events.slice(-3).map((ev, i) => (
+            <div
+              key={i}
+              style={{
+                fontSize: "0.7rem",
+                color: "var(--muted)",
+                fontFamily: "monospace",
+                lineHeight: 1.5,
+              }}
+            >
+              › {String((ev as Record<string, unknown>).event_type ?? JSON.stringify(ev)).slice(0, 60)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function App() {
@@ -33,6 +187,86 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState("mock");
   const [lastTick, setLastTick] = useState<string>("");
+
+  // Week 5 — pipeline control state
+  const [pipelineDept, setPipelineDept] = useState<"PRODUCT" | "MEDIA" | "AUTO">("AUTO");
+  const [launching, setLaunching] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const [recentRuns, setRecentRuns] = useState<PipelineRun[]>([]);
+  const pollTimers = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+
+  const refreshRecentRuns = useCallback(async () => {
+    try {
+      const res = await api.pipelineRecent();
+      setRecentRuns(res.runs);
+    } catch {
+      /* silent */
+    }
+  }, []);
+
+  const pollRun = useCallback(
+    (run_id: string) => {
+      if (pollTimers.current.has(run_id)) return;
+      const timer = setInterval(async () => {
+        try {
+          const run = await api.pipelineStatus(run_id);
+          setRecentRuns((prev) =>
+            prev.map((r) => (r.run_id === run_id ? run : r)),
+          );
+          if (run.status !== "STARTED" && run.status !== "RUNNING") {
+            clearInterval(pollTimers.current.get(run_id));
+            pollTimers.current.delete(run_id);
+          }
+        } catch {
+          clearInterval(pollTimers.current.get(run_id));
+          pollTimers.current.delete(run_id);
+        }
+      }, 3000);
+      pollTimers.current.set(run_id, timer);
+    },
+    [],
+  );
+
+  const launchPipeline = useCallback(async () => {
+    setLaunching(true);
+    setLaunchError(null);
+    try {
+      const result = await api.pipelineRun(pipelineDept);
+      const stub: PipelineRun = {
+        run_id: result.run_id,
+        venture_id: result.venture_id,
+        department: pipelineDept,
+        status: "STARTED",
+        current_stage: "RESEARCH_NODE",
+        started_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        completed_at: null,
+        event_count: 0,
+        recent_events: [],
+        last_error: null,
+      };
+      setRecentRuns((prev) => [stub, ...prev]);
+      pollRun(result.run_id);
+    } catch (e) {
+      setLaunchError(e instanceof Error ? e.message : "Launch failed");
+    } finally {
+      setLaunching(false);
+    }
+  }, [pipelineDept, pollRun]);
+
+  // Restart polling for any RUNNING runs after page refresh
+  useEffect(() => {
+    recentRuns.forEach((r) => {
+      if (r.status === "STARTED" || r.status === "RUNNING") {
+        pollRun(r.run_id);
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => pollTimers.current.forEach((t) => clearInterval(t));
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -67,9 +301,10 @@ export default function App() {
 
   useEffect(() => {
     refresh();
+    refreshRecentRuns();
     const id = setInterval(refresh, 8000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [refresh, refreshRecentRuns]);
 
   useEffect(() => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -79,6 +314,16 @@ export default function App() {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === "tick" && msg.revenue) setRevenue(msg.revenue);
+        // Update active runs from WebSocket tick
+        if (msg.active_pipeline_runs) {
+          const active: PipelineRun[] = msg.active_pipeline_runs;
+          setRecentRuns((prev) =>
+            prev.map((r) => {
+              const live = active.find((a) => a.run_id === r.run_id);
+              return live ? { ...r, ...live } : r;
+            }),
+          );
+        }
       } catch {
         /* ignore */
       }
@@ -146,6 +391,66 @@ export default function App() {
           </div>
         </section>
       )}
+
+      {/* Week 5 — Pipeline Control Panel */}
+      <section className="panel" style={{ marginTop: "1rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2>Pipeline Control</h2>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <select
+              value={pipelineDept}
+              onChange={(e) => setPipelineDept(e.target.value as typeof pipelineDept)}
+              style={{
+                background: "#111",
+                color: "var(--fg)",
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+                padding: "4px 8px",
+                fontSize: "0.8rem",
+              }}
+            >
+              <option value="AUTO">AUTO (CEO decides)</option>
+              <option value="PRODUCT">PRODUCT (SaaS)</option>
+              <option value="MEDIA">MEDIA (Content channel)</option>
+            </select>
+            <button
+              onClick={launchPipeline}
+              disabled={launching}
+              style={{
+                background: launching ? "#333" : "var(--accent)",
+                color: launching ? "var(--muted)" : "#000",
+                border: "none",
+                borderRadius: 4,
+                padding: "6px 16px",
+                fontSize: "0.82rem",
+                fontWeight: 700,
+                cursor: launching ? "not-allowed" : "pointer",
+                fontFamily: "monospace",
+              }}
+            >
+              {launching ? "Launching…" : "Launch New Venture"}
+            </button>
+          </div>
+        </div>
+
+        {launchError && (
+          <div style={{ color: "#f66", fontSize: "0.78rem", marginTop: 6 }}>
+            ⚠ {launchError}
+          </div>
+        )}
+
+        {recentRuns.length === 0 ? (
+          <p style={{ color: "var(--muted)", fontSize: "0.82rem", marginTop: 8 }}>
+            No pipeline runs yet. Click "Launch New Venture" to start.
+          </p>
+        ) : (
+          <div style={{ marginTop: 10 }}>
+            {recentRuns.slice(0, 6).map((run) => (
+              <ActiveRunCard key={run.run_id} run={run} onRefresh={refreshRecentRuns} />
+            ))}
+          </div>
+        )}
+      </section>
 
       <div className="grid grid-top">
         <section className="panel">
@@ -216,7 +521,11 @@ export default function App() {
             <>
               <h2 style={{ marginTop: "1rem" }}>Manual review queue</h2>
               {reviews.map((r) => (
-                <div key={r.venture_id + (r.created_at ?? "")} className="alert" style={{ borderColor: "var(--warn)" }}>
+                <div
+                  key={r.venture_id + (r.created_at ?? "")}
+                  className="alert"
+                  style={{ borderColor: "var(--warn)" }}
+                >
                   <strong>{r.venture_id}</strong> — {r.review_reason}
                 </div>
               ))}
