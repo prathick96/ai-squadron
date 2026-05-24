@@ -19,24 +19,44 @@ from pydantic import BaseModel, Field, model_validator
 # ---------------------------------------------------------------------------
 
 class EventType(str, Enum):
+    # ── Research & CEO ──────────────────────────────────────────
+    RESEARCH_DOSSIER_READY       = "RESEARCH_DOSSIER_READY"
     VENTURE_BRIEF_READY          = "VENTURE_BRIEF_READY"
+    # ── Department routing ──────────────────────────────────────
+    PRODUCT_VP_BRIEFED           = "PRODUCT_VP_BRIEFED"
+    MEDIA_VP_BRIEFED             = "MEDIA_VP_BRIEFED"
+    # ── Product pipeline ────────────────────────────────────────
     TECH_SPEC_READY              = "TECH_SPEC_READY"
     BUILD_COMPLETE               = "BUILD_COMPLETE"
+    # ── Media pipeline ──────────────────────────────────────────
+    SCRIPT_READY                 = "SCRIPT_READY"
+    VOICE_READY                  = "VOICE_READY"
+    VIDEO_READY                  = "VIDEO_READY"
+    THUMBNAIL_READY              = "THUMBNAIL_READY"
     CONTENT_PACKAGE_READY        = "CONTENT_PACKAGE_READY"
+    CONTENT_PUBLISHED            = "CONTENT_PUBLISHED"
+    ANALYTICS_UPDATED            = "ANALYTICS_UPDATED"
+    # ── Shared QA ───────────────────────────────────────────────
     QA_PASSED                    = "QA_PASSED"
     QA_FAILED                    = "QA_FAILED"
+    # ── Legal (new — veto authority) ────────────────────────────
+    LEGAL_CLEARANCE_GRANTED      = "LEGAL_CLEARANCE_GRANTED"
+    LEGAL_CLEARANCE_DENIED       = "LEGAL_CLEARANCE_DENIED"
+    # ── Security ────────────────────────────────────────────────
     SECURITY_CLEARANCE_GRANTED   = "SECURITY_CLEARANCE_GRANTED"
     SECURITY_VIOLATION_DETECTED  = "SECURITY_VIOLATION_DETECTED"
+    ACCOUNTS_PROVISIONED         = "ACCOUNTS_PROVISIONED"
+    # ── Deployment & growth ─────────────────────────────────────
     DEPLOYMENT_COMPLETE          = "DEPLOYMENT_COMPLETE"
     CAMPAIGN_LAUNCHED            = "CAMPAIGN_LAUNCHED"
     LOCALIZATION_COMPLETE        = "LOCALIZATION_COMPLETE"
     GROWTH_REPORT_READY          = "GROWTH_REPORT_READY"
+    TREND_ANALYSIS_READY         = "TREND_ANALYSIS_READY"
+    # ── Revenue engine ──────────────────────────────────────────
     REVENUE_SCALE_SIGNAL         = "REVENUE_SCALE_SIGNAL"
     REVENUE_KILL_SIGNAL          = "REVENUE_KILL_SIGNAL"
+    # ── Manual escalation ───────────────────────────────────────
     MANUAL_REVIEW_REQUIRED       = "MANUAL_REVIEW_REQUIRED"
-    TREND_ANALYSIS_READY         = "TREND_ANALYSIS_READY"
-    ACCOUNTS_PROVISIONED         = "ACCOUNTS_PROVISIONED"
-    RESEARCH_DOSSIER_READY       = "RESEARCH_DOSSIER_READY"
 
 
 class Priority(str, Enum):
@@ -47,21 +67,48 @@ class Priority(str, Enum):
 
 
 class AgentID(str, Enum):
-    MARKET_RESEARCH_TEAM = "MARKET_RESEARCH_TEAM"
-    CEO_NICHE_SCOUT    = "CEO_NICHE_SCOUT"
-    PRODUCT_TEAM       = "PRODUCT_TEAM"
-    ENGINEERING_TEAM   = "ENGINEERING_TEAM"
-    CONTENT_TEAM       = "CONTENT_TEAM"
-    QA_AUDITOR         = "QA_AUDITOR"
-    SECURITY_AGENT     = "SECURITY_AGENT"
-    DEPLOYMENT_TEAM    = "DEPLOYMENT_TEAM"
-    MARKETING_TEAM     = "MARKETING_TEAM"
-    GLOBAL_TEAM        = "GLOBAL_TEAM"
-    GROWTH_TEAM        = "GROWTH_TEAM"
-    REVENUE_ENGINE         = "REVENUE_ENGINE"
+    # ── Governance ──────────────────────────────────────────────
+    GRAND_CEO              = "GRAND_CEO"
+    RESEARCH_COUNCIL       = "RESEARCH_COUNCIL"
+    # ── Product department ──────────────────────────────────────
+    PRODUCT_VP             = "PRODUCT_VP"
+    PRODUCT_MANAGER        = "PRODUCT_MANAGER"
+    ENGINEERING_TEAM       = "ENGINEERING_TEAM"
+    QA_TECHNICAL           = "QA_TECHNICAL"
+    DEPLOYMENT_AGENT       = "DEPLOYMENT_AGENT"
+    MARKETING_SEO          = "MARKETING_SEO"
+    PRODUCT_GROWTH         = "PRODUCT_GROWTH"
+    # ── Media department ────────────────────────────────────────
+    MEDIA_VP               = "MEDIA_VP"
+    SCRIPT_AGENT           = "SCRIPT_AGENT"
+    VOICE_AGENT            = "VOICE_AGENT"
+    VIDEO_AGENT            = "VIDEO_AGENT"
+    THUMBNAIL_AGENT        = "THUMBNAIL_AGENT"
+    SEO_METADATA_AGENT     = "SEO_METADATA_AGENT"
+    QA_COMPLIANCE          = "QA_COMPLIANCE"
+    PUBLISHING_AGENT       = "PUBLISHING_AGENT"
+    ANALYTICS_AGENT        = "ANALYTICS_AGENT"
+    MEDIA_GROWTH           = "MEDIA_GROWTH"
+    # ── Shared / Legal / Security ────────────────────────────────
+    LEGAL_AGENT            = "LEGAL_AGENT"
+    SECURITY_AGENT         = "SECURITY_AGENT"
+    ANTI_BAN_AGENT         = "ANTI_BAN_AGENT"
+    CREDENTIAL_GUARDIAN    = "CREDENTIAL_GUARDIAN"
     ACCOUNT_DISTRIBUTION   = "ACCOUNT_DISTRIBUTION"
+    # ── System ──────────────────────────────────────────────────
+    REVENUE_ENGINE         = "REVENUE_ENGINE"
     BROADCAST              = "BROADCAST"
     ORCHESTRATOR           = "ORCHESTRATOR"
+    # ── Legacy aliases (kept for backward compatibility) ─────────
+    MARKET_RESEARCH_TEAM   = "MARKET_RESEARCH_TEAM"
+    CEO_NICHE_SCOUT        = "CEO_NICHE_SCOUT"
+    PRODUCT_TEAM           = "PRODUCT_TEAM"
+    CONTENT_TEAM           = "CONTENT_TEAM"
+    QA_AUDITOR             = "QA_AUDITOR"
+    DEPLOYMENT_TEAM        = "DEPLOYMENT_TEAM"
+    MARKETING_TEAM         = "MARKETING_TEAM"
+    GLOBAL_TEAM            = "GLOBAL_TEAM"
+    GROWTH_TEAM            = "GROWTH_TEAM"
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +532,115 @@ class ManualReviewPayload(BaseModel):
     artifact_type: Literal["BUILD", "CONTENT"]
     retry_count: int
     critique_log: CritiqueLog | None = None
+
+
+# ---------------------------------------------------------------------------
+# Two-department routing payloads (new)
+# ---------------------------------------------------------------------------
+
+class ProductVPBriefPayload(BaseModel):
+    venture_id: str
+    venture_type: Literal["MICRO_SAAS", "AFFILIATE_SITE"]
+    niche: str
+    target_audience: str
+    build_priority: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM"
+    token_budget: int = 50_000
+
+
+class MediaVPBriefPayload(BaseModel):
+    venture_id: str
+    venture_type: Literal["MEDIA_CHANNEL"]
+    niche: str
+    target_audience: str
+    platform: Literal["youtube", "tiktok", "instagram"] = "youtube"
+    content_angles: list[str] = []
+    upload_frequency: str = "daily"
+
+
+# ---------------------------------------------------------------------------
+# Media pipeline stage payloads (new)
+# ---------------------------------------------------------------------------
+
+class ScriptPayload(BaseModel):
+    venture_id: str
+    platform: Literal["youtube", "tiktok", "instagram", "x"]
+    content_angle: str
+    hook: str
+    body_sections: list[str]
+    cta: str
+    word_count: int
+    estimated_duration_sec: int
+    hook_variants: list[str] = []
+
+
+class VoicePayload(BaseModel):
+    venture_id: str
+    audio_file_path: str
+    duration_sec: float
+    voice_id: str
+    human_likeness_score: float
+    provider: Literal["elevenlabs", "xtts", "mock"] = "mock"
+
+
+class VideoPayload(BaseModel):
+    venture_id: str
+    video_file_path: str
+    resolution: str
+    duration_sec: float
+    has_captions: bool
+    caption_file_path: str | None = None
+    provider: Literal["remotion", "ffmpeg", "mock"] = "mock"
+
+
+class ThumbnailPayload(BaseModel):
+    venture_id: str
+    variants: list[str]          # list of file paths (A/B/C variants)
+    selected_variant: str | None = None
+    provider: Literal["flux", "sdxl", "mock"] = "mock"
+
+
+class PublishingResultPayload(BaseModel):
+    venture_id: str
+    platform: str
+    published_url: str
+    video_id: str | None = None
+    scheduled_at: str | None = None
+    status: Literal["LIVE", "SCHEDULED", "FAILED"]
+
+
+class AnalyticsPayload(BaseModel):
+    venture_id: str
+    platform: str
+    period: str
+    views: int = 0
+    watch_time_hours: float = 0.0
+    ctr_pct: float = 0.0
+    subscribers_gained: int = 0
+    revenue_usd: float = 0.0
+    top_content_angle: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Legal clearance payload (new — veto authority)
+# ---------------------------------------------------------------------------
+
+class PolicyFlag(BaseModel):
+    platform: str
+    clause: str
+    description: str
+    severity: Literal["INFO", "WARNING", "BLOCKER"]
+    recommendation: str
+
+
+class LegalClearancePayload(BaseModel):
+    venture_id: str
+    is_cleared: bool
+    platforms_reviewed: list[str]
+    tos_version: str
+    policy_flags: list[PolicyFlag] = []
+    copyright_clear: bool = True
+    gdpr_reviewed: bool = False
+    clearance_expires_at: str   # ISO 8601 — clearances expire after 7 days
 
 
 # ---------------------------------------------------------------------------

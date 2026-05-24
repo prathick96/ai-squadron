@@ -64,23 +64,59 @@ def _get_anthropic() -> anthropic.AsyncAnthropic:
 _KIMI_MODEL = os.getenv("KIMI_MODEL", "moonshotai/kimi-k2.6")
 
 MODEL_REGISTRY: dict[str, tuple[str, str]] = {
-    # Kimi Research Council (Adaptive Provider) — parallel scouts + debate
-    "KIMI_SCOUT_OPPORTUNITY":  ("kimi", _KIMI_MODEL),
+    # ── Research Council (Kimi — 1M context for deep niche research) ──────
+    "KIMI_SCOUT_TREND":        ("kimi", _KIMI_MODEL),
+    "KIMI_SCOUT_COMPETITOR":   ("kimi", _KIMI_MODEL),
     "KIMI_SCOUT_SKEPTIC":      ("kimi", _KIMI_MODEL),
+    "KIMI_SCOUT_AUDIENCE":     ("kimi", _KIMI_MODEL),
     "KIMI_SCOUT_EXECUTION":    ("kimi", _KIMI_MODEL),
     "KIMI_DEBATE_SYNTHESIZER": ("kimi", _KIMI_MODEL),
-    "CEO_NICHE_SCOUT":     ("gemini",    "gemini-2.5-pro"),
+    # Legacy scout names (backward compat)
+    "KIMI_SCOUT_OPPORTUNITY":  ("kimi", _KIMI_MODEL),
+
+    # ── Governance (Gemini Pro — strategic reasoning) ─────────────────────
+    "GRAND_CEO":           ("gemini",    "gemini-2.5-pro"),
+    "LEGAL_AGENT":         ("gemini",    "gemini-2.5-pro"),
     "REVENUE_ENGINE":      ("gemini",    "gemini-2.5-pro"),
-    "PRODUCT_TEAM":        ("gemini",    _FLASH),
-    "CONTENT_TEAM":        ("gemini",    _FLASH),
-    "SECURITY_AGENT":      ("gemini",    _FLASH),
-    "MARKETING_TEAM":      ("gemini",    _FLASH),
-    "GLOBAL_TEAM":         ("gemini",    _FLASH),
-    "GROWTH_TEAM":         ("gemini",    _FLASH),
-    "DEPLOYMENT_TEAM":     ("gemini",    _FLASH),
+    # Legacy
+    "CEO_NICHE_SCOUT":     ("gemini",    "gemini-2.5-pro"),
+
+    # ── Engineering (Claude Sonnet — best code gen) ───────────────────────
     "ENGINEERING_TEAM":    ("anthropic", "claude-sonnet-4-6"),
+
+    # ── QA critique (Claude Haiku — precise structured directives) ────────
+    "QA_TECHNICAL_CRITIQUE":   ("anthropic", "claude-haiku-4-5-20251001"),
+    "QA_COMPLIANCE_CRITIQUE":  ("anthropic", "claude-haiku-4-5-20251001"),
+    # Legacy
     "QA_AUDITOR_CRITIQUE": ("anthropic", "claude-haiku-4-5-20251001"),
-    "QA_AUDITOR_GATE":     ("gemini",    _FLASH),
+
+    # ── All other agents (Gemini Flash — cost-efficient) ──────────────────
+    "PRODUCT_VP":          ("gemini", _FLASH),
+    "PRODUCT_MANAGER":     ("gemini", _FLASH),
+    "MEDIA_VP":            ("gemini", _FLASH),
+    "SCRIPT_AGENT":        ("gemini", _FLASH),
+    "VOICE_AGENT":         ("gemini", _FLASH),
+    "VIDEO_AGENT":         ("gemini", _FLASH),
+    "THUMBNAIL_AGENT":     ("gemini", _FLASH),
+    "SEO_METADATA_AGENT":  ("gemini", _FLASH),
+    "QA_TECHNICAL_GATE":   ("gemini", _FLASH),
+    "QA_COMPLIANCE_GATE":  ("gemini", _FLASH),
+    "SECURITY_AGENT":      ("gemini", _FLASH),
+    "ANTI_BAN_AGENT":      ("gemini", _FLASH),
+    "DEPLOYMENT_AGENT":    ("gemini", _FLASH),
+    "MARKETING_SEO":       ("gemini", _FLASH),
+    "PUBLISHING_AGENT":    ("gemini", _FLASH),
+    "ANALYTICS_AGENT":     ("gemini", _FLASH),
+    "PRODUCT_GROWTH":      ("gemini", _FLASH),
+    "MEDIA_GROWTH":        ("gemini", _FLASH),
+    # Legacy
+    "PRODUCT_TEAM":        ("gemini", _FLASH),
+    "CONTENT_TEAM":        ("gemini", _FLASH),
+    "MARKETING_TEAM":      ("gemini", _FLASH),
+    "GLOBAL_TEAM":         ("gemini", _FLASH),
+    "GROWTH_TEAM":         ("gemini", _FLASH),
+    "DEPLOYMENT_TEAM":     ("gemini", _FLASH),
+    "QA_AUDITOR_GATE":     ("gemini", _FLASH),
 }
 
 # ---------------------------------------------------------------------------

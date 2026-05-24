@@ -15,6 +15,55 @@ from typing import Any, Literal, TypedDict
 # Sub-schemas embedded inside AgentState
 # ---------------------------------------------------------------------------
 
+class LegalClearance(TypedDict, total=False):
+    venture_id: str
+    is_cleared: bool
+    platforms_reviewed: list[str]
+    tos_version: str
+    policy_flags: list[dict[str, Any]]
+    copyright_clear: bool
+    gdpr_reviewed: bool
+    clearance_expires_at: str
+
+
+class ScriptPackage(TypedDict, total=False):
+    venture_id: str
+    platform: str
+    content_angle: str
+    hook: str
+    body_sections: list[str]
+    cta: str
+    word_count: int
+    estimated_duration_sec: int
+    hook_variants: list[str]
+
+
+class VoicePackage(TypedDict, total=False):
+    venture_id: str
+    audio_file_path: str
+    duration_sec: float
+    voice_id: str
+    human_likeness_score: float
+    provider: str
+
+
+class VideoPackage(TypedDict, total=False):
+    venture_id: str
+    video_file_path: str
+    resolution: str
+    duration_sec: float
+    has_captions: bool
+    caption_file_path: str | None
+    provider: str
+
+
+class ThumbnailPackage(TypedDict, total=False):
+    venture_id: str
+    variants: list[str]
+    selected_variant: str | None
+    provider: str
+
+
 class ResearchDossier(TypedDict, total=False):
     venture_id: str
     trend_snapshot: dict[str, Any]
@@ -153,13 +202,35 @@ class AgentState(TypedDict, total=False):
     created_at: str                    # ISO 8601
 
     # ------------------------------------------------------------------
-    # Artifacts produced per stage (None until that node completes)
+    # Department routing (set by Grand CEO)
+    # ------------------------------------------------------------------
+    department: Literal["PRODUCT", "MEDIA"] | None
+
+    # ------------------------------------------------------------------
+    # Governance artifacts
     # ------------------------------------------------------------------
     research_dossier: ResearchDossier | None
     venture_brief: VentureBrief | None
+
+    # ------------------------------------------------------------------
+    # Product department artifacts
+    # ------------------------------------------------------------------
     tech_spec: TechSpec | None
     build_artifact: BuildArtifact | None
-    content_package: ContentPackage | None
+
+    # ------------------------------------------------------------------
+    # Media department artifacts (staged: script → voice → video → thumb)
+    # ------------------------------------------------------------------
+    script_package: ScriptPackage | None
+    voice_package: VoicePackage | None
+    video_package: VideoPackage | None
+    thumbnail_package: ThumbnailPackage | None
+    content_package: ContentPackage | None   # assembled final package
+
+    # ------------------------------------------------------------------
+    # Shared pipeline artifacts
+    # ------------------------------------------------------------------
+    legal_clearance: LegalClearance | None
     qa_report: QAReport | None
     security_clearance: SecurityClearance | None
     account_distribution_plan: AccountDistributionPlan | None
@@ -167,6 +238,8 @@ class AgentState(TypedDict, total=False):
     campaign_plan: CampaignPlan | None
     localization_map: LocalizationMap | None
     growth_signals: GrowthSignals | None
+    published_urls: dict[str, str]           # platform → URL
+    channel_analytics: dict[str, Any] | None
 
     # ------------------------------------------------------------------
     # QA retry loop control
@@ -192,6 +265,7 @@ class AgentState(TypedDict, total=False):
     # ------------------------------------------------------------------
     last_error: str | None
     manual_review_reason: str | None
+    legal_denial_reason: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -206,15 +280,29 @@ def init_state(venture_id: str | None = None) -> AgentState:
     return AgentState(
         run_id=str(uuid.uuid4()),
         venture_id=venture_id or f"ven_{uuid.uuid4().hex[:8]}",
-        pipeline_stage="CEO_NODE",
+        pipeline_stage="RESEARCH_NODE",
         created_at=datetime.now(timezone.utc).isoformat(),
 
-        # Artifacts — all None until produced
+        # Department (set by Grand CEO after research)
+        department=None,
+
+        # Governance artifacts
         research_dossier=None,
         venture_brief=None,
+
+        # Product department artifacts
         tech_spec=None,
         build_artifact=None,
+
+        # Media department artifacts
+        script_package=None,
+        voice_package=None,
+        video_package=None,
+        thumbnail_package=None,
         content_package=None,
+
+        # Shared artifacts
+        legal_clearance=None,
         qa_report=None,
         security_clearance=None,
         account_distribution_plan=None,
@@ -222,6 +310,8 @@ def init_state(venture_id: str | None = None) -> AgentState:
         campaign_plan=None,
         localization_map=None,
         growth_signals=None,
+        published_urls={},
+        channel_analytics=None,
 
         # QA loop
         qa_target=None,
@@ -237,6 +327,7 @@ def init_state(venture_id: str | None = None) -> AgentState:
         event_log=[],
         last_error=None,
         manual_review_reason=None,
+        legal_denial_reason=None,
     )
 
 

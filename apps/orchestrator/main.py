@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from apps.orchestrator.graph import build_squadron_graph
+from typing import Literal
 from packages.db.client import is_supabase_connected
 from packages.db.pipeline import (
     begin_pipeline_run,
@@ -51,12 +52,15 @@ log = logging.getLogger("squadron.main")
 # Run modes
 # ---------------------------------------------------------------------------
 
-async def run_single_pipeline(venture_id: str | None = None) -> dict:
+async def run_single_pipeline(
+    venture_id: str | None = None,
+    department: Literal["PRODUCT", "MEDIA", "AUTO"] = "AUTO",
+) -> dict:
     """
-    Execute one complete pipeline run from CEO → Growth.
+    Execute one complete pipeline run from Research → Growth.
     Returns the final state dict.
     """
-    graph  = build_squadron_graph()
+    graph  = build_squadron_graph(department)
     state  = init_state(venture_id)
 
     log.info("━" * 60)
@@ -123,27 +127,37 @@ async def run_watch_mode() -> None:
         log.info("Watch mode stopped")
 
 
-def run_dry_run() -> None:
+def run_dry_run(department: str = "AUTO") -> None:
     """
     Validate that the graph compiles and all imports resolve.
     No LLM calls made.
     """
-    log.info("Running dry-run validation...")
+    log.info("Running dry-run validation (department=%s)...", department)
     try:
-        graph = build_squadron_graph()
+        graph = build_squadron_graph(department)  # type: ignore[arg-type]
         state = init_state()
         log.info("✓ Graph compiled successfully")
         log.info("✓ AgentState initialised: run_id=%s", state["run_id"])
         log.info("✓ All agent imports resolved")
         log.info("✓ Dry run PASSED — system is ready for live execution")
 
-        # Print graph structure
-        log.info("\nGraph node registry:")
-        for node_name in [
-            "RESEARCH_NODE", "CEO_NODE", "PRODUCT_NODE", "ENGINEERING_NODE", "CONTENT_NODE",
-            "QA_NODE", "SECURITY_NODE", "ACCOUNT_DISTRIBUTION_NODE", "DEPLOYMENT_NODE",
-            "MARKETING_NODE", "GLOBAL_NODE", "GROWTH_NODE", "MANUAL_REVIEW_NODE",
-        ]:
+        product_nodes = [
+            "RESEARCH_NODE", "CEO_NODE", "PRODUCT_VP_NODE", "PRODUCT_MANAGER_NODE",
+            "ENGINEERING_NODE", "QA_TECHNICAL_NODE", "LEGAL_NODE", "SECURITY_NODE",
+            "ACCOUNT_DISTRIBUTION_NODE", "DEPLOYMENT_NODE", "MARKETING_SEO_NODE",
+            "PRODUCT_GROWTH_NODE", "MANUAL_REVIEW_NODE",
+        ]
+        media_nodes = [
+            "RESEARCH_NODE", "CEO_NODE", "MEDIA_VP_NODE", "SCRIPT_NODE", "VOICE_NODE",
+            "VIDEO_NODE", "THUMBNAIL_NODE", "SEO_METADATA_NODE", "QA_COMPLIANCE_NODE",
+            "LEGAL_NODE", "SECURITY_NODE", "ACCOUNT_DISTRIBUTION_NODE", "PUBLISHING_NODE",
+            "ANALYTICS_NODE", "ANTI_BAN_NODE", "MEDIA_GROWTH_NODE", "MANUAL_REVIEW_NODE",
+        ]
+        nodes = product_nodes if department == "PRODUCT" else (
+            media_nodes if department == "MEDIA" else product_nodes + media_nodes
+        )
+        log.info("\nExpected node registry (%s):", department)
+        for node_name in dict.fromkeys(nodes):  # deduplicate while preserving order
             log.info("  ✓ %s", node_name)
 
     except Exception as exc:
@@ -220,6 +234,12 @@ Examples:
         help="Execution mode (default: dry-run)",
     )
     parser.add_argument(
+        "--department",
+        choices=["PRODUCT", "MEDIA", "AUTO"],
+        default="AUTO",
+        help="Department pipeline to run (default: AUTO — CEO decides)",
+    )
+    parser.add_argument(
         "--venture-id",
         default=None,
         help="Optional venture ID override for single mode",
@@ -232,10 +252,10 @@ Examples:
     args = parser.parse_args()
 
     if args.mode == "dry-run":
-        run_dry_run()
+        run_dry_run(args.department)
 
     elif args.mode == "single":
-        final = asyncio.run(run_single_pipeline(args.venture_id))
+        final = asyncio.run(run_single_pipeline(args.venture_id, args.department))
         if args.output_json:
             with open(args.output_json, "w") as f:
                 # Serialize state — drop non-serializable items gracefully
