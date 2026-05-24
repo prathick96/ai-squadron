@@ -59,27 +59,27 @@ The portfolio is designed around 450 venture slots — not as a target inventory
 AI Squadron is a two-department autonomous venture organisation governed by a central intelligence layer.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          GRAND CEO AGENT                                │
-│          Strategic decision-maker · Portfolio governor                   │
-│          Fed by: Global Research Council · Revenue Engine               │
+┌────────────────────────────────────────────────────────────────────────┐
+│                          GRAND CEO AGENT                               │
+│          Strategic decision-maker · Portfolio governor                 │
+│          Fed by: Global Research Council · Revenue Engine              │
 └─────────────────────────┬─────────────────────────┬────────────────────┘
                           │                         │
              ┌────────────▼──────────┐   ┌──────────▼──────────────┐
-             │   PRODUCT DEPARTMENT  │   │   MEDIA DEPARTMENT       │
-             │   VP: Product Head    │   │   VP: Media Head         │
-             │                       │   │                          │
-             │  Finds niches         │   │  Creates content         │
-             │  Builds SaaS apps     │   │  Publishes videos        │
-             │  Deploys to Railway   │   │  Grows channels          │
-             │  Charges Stripe MRR   │   │  Earns AdSense + deals   │
+             │   PRODUCT DEPARTMENT  │   │   MEDIA DEPARTMENT      │
+             │   VP: Product Head    │   │   VP: Media Head        │
+             │                       │   │                         │
+             │  Finds niches         │   │  Creates content        │
+             │  Builds SaaS apps     │   │  Publishes videos       │
+             │  Deploys to Railway   │   │  Grows channels         │
+             │  Charges Stripe MRR   │   │  Earns AdSense + deals  │
              └────────────┬──────────┘   └──────────┬──────────────┘
                           │                         │
              ┌────────────▼─────────────────────────▼────────────────────┐
-             │                  SHARED SERVICES                           │
-             │   Legal Agent · Security Agent · Revenue Engine            │
-             │   Event Bus · Supabase DB · Command Center Dashboard       │
-             └────────────────────────────────────────────────────────────┘
+             │                  SHARED SERVICES                          │
+             │   Legal Agent · Security Agent · Revenue Engine           │
+             │   Event Bus · Supabase DB · Command Center Dashboard      │
+             └───────────────────────────────────────────────────────────┘
 ```
 
 **Two products, one system.**
@@ -264,7 +264,7 @@ Decisions the VP makes:
 
 ### 6.2 Product Manager Agent
 
-**Model:** Gemini 2.0 Flash
+**Model:** Gemini 3.5 Flash
 **Input:** VentureBrief from Product VP
 **Output:** TechSpec — the complete technical specification
 
@@ -1093,7 +1093,7 @@ Do not upgrade to paid tiers of any service until the portfolio generates enough
 
 ---
 
-*This document is confidential and intended solely for the founding team of AI Squadron.*
+*This document is confidential and intended solely for the founding team of AI Squadron a unit of Paddhu's Ventures.*
 *Review and update quarterly as the organisation grows.*
 
 ---
