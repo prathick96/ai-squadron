@@ -1,15 +1,12 @@
-# railway.toml — AI Squadron monorepo config
+# railway.toml — AI Squadron deployment config
 # Railway documentation: https://docs.railway.app/reference/config-as-code
 #
-# This file points Railway at the backend/ subdirectory so Railpack/Nixpacks
-# can find pyproject.toml and detect the Python project correctly.
-# Without this, Railway scans the repo root and finds only subdirectories.
+# pyproject.toml lives at the repo root — no rootDirectory needed.
+# Non-editable install avoids the editable-install .pth path-baking issue
+# that causes "module not found" crashes in Railway's multi-stage builds.
 
 [build]
-rootDirectory = "backend"
-# Railpack 0.23+ ignores nixpacks.toml — must set buildCommand here.
-# Default `pip install .` skips [api] and [revenue] extras (no uvicorn/fastapi/stripe).
-buildCommand = "pip install -e '.[api,revenue]'"
+buildCommand = "pip install '.[api,revenue]'"
 
 [deploy]
 startCommand = "uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --loop asyncio --http h11"
