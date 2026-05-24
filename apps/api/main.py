@@ -180,13 +180,23 @@ def _revenue_payload() -> tuple[dict, str]:
 
 @app.get("/api/health")
 def health() -> dict:
-    from packages.revenue.store import is_local_mode
+    # Wrapped in try/except: a broken optional import must never turn the
+    # health endpoint into a 500, which would trigger Railway's restart loop.
+    try:
+        from packages.revenue.store import is_local_mode
+        storage = "local_json" if is_local_mode() else "supabase"
+    except Exception:
+        storage = "unknown"
+    try:
+        active = registry.active_count()
+    except Exception:
+        active = 0
     return {
         "status": "ok",
         "service": "command-center-api",
         "version": "0.3.0",
-        "storage": "local_json" if is_local_mode() else "supabase",
-        "active_pipeline_runs": registry.active_count(),
+        "storage": storage,
+        "active_pipeline_runs": active,
     }
 
 
