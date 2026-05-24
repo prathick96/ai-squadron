@@ -1,7 +1,14 @@
 """
 apps/orchestrator/graph.py
-LangGraph graph assembly — wires all agent nodes with correct edges.
-This is the structural core of the entire system.
+AI Squadron graph dispatcher — routes to Product or Media sub-graph.
+
+Usage:
+  from apps.orchestrator.graph import build_squadron_graph
+  graph = build_squadron_graph(department="PRODUCT")   # or "MEDIA"
+
+For backward compatibility, build_squadron_graph() with no args defaults to
+running both pipelines in sequence (research + CEO shared, then branch).
+In practice, callers should pass --department to main.py to select one.
 """
 from __future__ import annotations
 
@@ -10,214 +17,232 @@ from typing import Literal
 
 from langgraph.graph import END, StateGraph
 
-from packages.agents.account_distribution import account_distribution_node
-from packages.agents.ceo_niche_scout import ceo_niche_scout_node
-from packages.agents.market_research import market_research_node
-from packages.agents.content_team import content_team_node
-from packages.agents.deployment_team import deployment_team_node
-from packages.agents.engineering_team import engineering_team_node
-from packages.agents.global_approach import global_approach_node
-from packages.agents.growth_team import growth_team_node
-from packages.agents.marketing_team import marketing_team_node
-from packages.agents.product_team import product_team_node
-from packages.agents.qa_auditor import qa_auditor_node
-from packages.agents.security_agent import security_agent_node
 from packages.state.agent_state import AgentState
 
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Manual review stub node — fires when QA max_retries is exhausted
-# ---------------------------------------------------------------------------
+def build_squadron_graph(
+    department: Literal["PRODUCT", "MEDIA", "AUTO"] = "AUTO",
+) -> StateGraph:
+    """
+    Return the compiled LangGraph for the requested department.
 
-async def manual_review_node(state: AgentState) -> AgentState:
-    import uuid
+    department="AUTO"    → shared RESEARCH+CEO, then routes by CEO's department decision
+    department="PRODUCT" → full Product pipeline
+    department="MEDIA"   → full Media pipeline
+    """
+    if department == "PRODUCT":
+        from apps.orchestrator.product_graph import build_product_graph
+        return build_product_graph()
 
-    from packages.revenue.store import enqueue_manual_review
+    if department == "MEDIA":
+        from apps.orchestrator.media_graph import build_media_graph
+        return build_media_graph()
 
-    reason = state.get("manual_review_reason", "Unknown — check QA report")
-    venture_id = state["venture_id"]
-    run_id = state["run_id"]
-    qa_report = state.get("qa_report") or {}
+    # AUTO: shared entry points → conditional split on CEO's department decision
+    return _build_auto_graph()
 
-    enqueue_manual_review({
-        "id": str(uuid.uuid4()),
-        "venture_id": venture_id,
-        "run_id": run_id,
-        "review_reason": reason,
-        "artifact_type": qa_report.get("artifact_type", "BUILD"),
-        "priority": "CRITICAL",
+
+def _build_auto_graph() -> StateGraph:
+    """
+    Unified graph: shared RESEARCH + CEO, then conditionally enters
+    the Product or Media pipeline based on CEO's department assignment.
+    This avoids duplicating research/CEO nodes in both sub-graphs.
+    """
+    from packages.agents.governance.research_council import research_council_node
+    from packages.agents.governance.grand_ceo import grand_ceo_node
+
+    # Import all department nodes
+    from packages.agents.product.product_vp import product_vp_node
+    from packages.agents.product.product_manager import product_manager_node
+    from packages.agents.product.engineering_team import engineering_team_node
+    from packages.agents.product.qa_technical import qa_technical_node
+    from packages.agents.product.deployment_agent import deployment_agent_node
+    from packages.agents.product.marketing_seo import marketing_seo_node
+    from packages.agents.product.product_growth import product_growth_node
+
+    from packages.agents.media.media_vp import media_vp_node
+    from packages.agents.media.script_agent import script_agent_node
+    from packages.agents.media.voice_agent import voice_agent_node
+    from packages.agents.media.video_agent import video_agent_node
+    from packages.agents.media.thumbnail_agent import thumbnail_agent_node
+    from packages.agents.media.seo_metadata_agent import seo_metadata_node
+    from packages.agents.media.qa_compliance import qa_compliance_node
+    from packages.agents.media.publishing_agent import publishing_agent_node
+    from packages.agents.media.analytics_agent import analytics_agent_node
+    from packages.agents.media.media_growth import media_growth_node
+
+    from packages.agents.shared.legal_agent import legal_agent_node
+    from packages.agents.shared.security_agent import security_agent_node
+    from packages.agents.shared.anti_ban_agent import anti_ban_agent_node
+    from packages.agents.shared.account_distribution import account_distribution_node
+
+    g: StateGraph = StateGraph(AgentState)
+
+    # Governance (shared)
+    g.add_node("RESEARCH_NODE", research_council_node)
+    g.add_node("CEO_NODE",      grand_ceo_node)
+
+    # Product nodes
+    g.add_node("PRODUCT_VP_NODE",        product_vp_node)
+    g.add_node("PRODUCT_MANAGER_NODE",   product_manager_node)
+    g.add_node("ENGINEERING_NODE",       engineering_team_node)
+    g.add_node("QA_TECHNICAL_NODE",      qa_technical_node)
+
+    # Media nodes
+    g.add_node("MEDIA_VP_NODE",          media_vp_node)
+    g.add_node("SCRIPT_NODE",            script_agent_node)
+    g.add_node("VOICE_NODE",             voice_agent_node)
+    g.add_node("VIDEO_NODE",             video_agent_node)
+    g.add_node("THUMBNAIL_NODE",         thumbnail_agent_node)
+    g.add_node("SEO_METADATA_NODE",      seo_metadata_node)
+    g.add_node("QA_COMPLIANCE_NODE",     qa_compliance_node)
+    g.add_node("PUBLISHING_NODE",        publishing_agent_node)
+    g.add_node("ANALYTICS_NODE",         analytics_agent_node)
+    g.add_node("ANTI_BAN_NODE",          anti_ban_agent_node)
+    g.add_node("MEDIA_GROWTH_NODE",      media_growth_node)
+
+    # Shared post-QA
+    g.add_node("LEGAL_NODE",                 legal_agent_node)
+    g.add_node("SECURITY_NODE",              security_agent_node)
+    g.add_node("ACCOUNT_DISTRIBUTION_NODE",  account_distribution_node)
+
+    # Department-specific post-deploy
+    g.add_node("DEPLOYMENT_NODE",        deployment_agent_node)
+    g.add_node("MARKETING_SEO_NODE",     marketing_seo_node)
+    g.add_node("PRODUCT_GROWTH_NODE",    product_growth_node)
+    g.add_node("MANUAL_REVIEW_NODE",     _manual_review_node)
+
+    # Entry
+    g.set_entry_point("RESEARCH_NODE")
+    g.add_edge("RESEARCH_NODE", "CEO_NODE")
+
+    # CEO → department split
+    g.add_conditional_edges("CEO_NODE", _ceo_routing_edge, {
+        "PRODUCT_VP_NODE":    "PRODUCT_VP_NODE",
+        "MEDIA_VP_NODE":      "MEDIA_VP_NODE",
+        END:                  END,
     })
 
-    log.critical(
-        "[MANUAL_REVIEW] venture=%s | reason=%s | retries=%d | queued for human",
-        venture_id, reason, state.get("qa_retry_count", 0),
-    )
-    return {**state, "pipeline_stage": "MANUAL_REVIEW"}
+    # Product pipeline
+    g.add_edge("PRODUCT_VP_NODE",      "PRODUCT_MANAGER_NODE")
+    g.add_edge("PRODUCT_MANAGER_NODE", "ENGINEERING_NODE")
+    g.add_edge("ENGINEERING_NODE",     "QA_TECHNICAL_NODE")
+    g.add_conditional_edges("QA_TECHNICAL_NODE", _product_qa_edge, {
+        "LEGAL_NODE":         "LEGAL_NODE",
+        "ENGINEERING_NODE":   "ENGINEERING_NODE",
+        "MANUAL_REVIEW_NODE": "MANUAL_REVIEW_NODE",
+    })
 
+    # Media pipeline
+    g.add_edge("MEDIA_VP_NODE",     "SCRIPT_NODE")
+    g.add_edge("SCRIPT_NODE",       "VOICE_NODE")
+    g.add_edge("VOICE_NODE",        "VIDEO_NODE")
+    g.add_edge("VIDEO_NODE",        "THUMBNAIL_NODE")
+    g.add_edge("THUMBNAIL_NODE",    "SEO_METADATA_NODE")
+    g.add_edge("SEO_METADATA_NODE", "QA_COMPLIANCE_NODE")
+    g.add_conditional_edges("QA_COMPLIANCE_NODE", _media_qa_edge, {
+        "LEGAL_NODE":         "LEGAL_NODE",
+        "SCRIPT_NODE":        "SCRIPT_NODE",
+        "MANUAL_REVIEW_NODE": "MANUAL_REVIEW_NODE",
+    })
 
-# ---------------------------------------------------------------------------
-# Conditional edge functions
-# ---------------------------------------------------------------------------
+    # Shared compliance + distribution
+    g.add_conditional_edges("LEGAL_NODE", _legal_edge, {
+        "SECURITY_NODE":      "SECURITY_NODE",
+        "MANUAL_REVIEW_NODE": "MANUAL_REVIEW_NODE",
+    })
+    g.add_edge("SECURITY_NODE", "ACCOUNT_DISTRIBUTION_NODE")
 
-def product_routing_edge(
-    state: AgentState,
-) -> Literal["ENGINEERING_NODE", "CONTENT_NODE"]:
-    """
-    After Product Node: route to Engineering for MICRO_SAAS,
-    to Content for MEDIA_CHANNEL or AFFILIATE_SITE.
-    """
-    spec = state.get("tech_spec") or {}
-    product_type = spec.get("product_type", "MICRO_SAAS")
-    route = "ENGINEERING_NODE" if product_type == "MICRO_SAAS" else "CONTENT_NODE"
-    log.debug("product_routing_edge → %s (product_type=%s)", route, product_type)
-    return route
+    # Account dist → department-specific deploy
+    g.add_conditional_edges("ACCOUNT_DISTRIBUTION_NODE", _dept_deploy_edge, {
+        "DEPLOYMENT_NODE":  "DEPLOYMENT_NODE",
+        "PUBLISHING_NODE":  "PUBLISHING_NODE",
+    })
 
+    # Product post-deploy
+    g.add_edge("DEPLOYMENT_NODE",   "MARKETING_SEO_NODE")
+    g.add_edge("MARKETING_SEO_NODE", "PRODUCT_GROWTH_NODE")
+    g.add_edge("PRODUCT_GROWTH_NODE", END)
 
-def qa_routing_edge(
-    state: AgentState,
-) -> Literal["SECURITY_NODE", "ENGINEERING_NODE", "CONTENT_NODE", "MANUAL_REVIEW_NODE"]:
-    """
-    The critical gate of the entire pipeline.
-    Determines what happens after every QA audit.
+    # Media post-publish
+    g.add_edge("PUBLISHING_NODE", "ANALYTICS_NODE")
+    g.add_edge("ANALYTICS_NODE",  "ANTI_BAN_NODE")
+    g.add_conditional_edges("ANTI_BAN_NODE", _anti_ban_edge, {
+        "MEDIA_GROWTH_NODE":  "MEDIA_GROWTH_NODE",
+        "MANUAL_REVIEW_NODE": "MANUAL_REVIEW_NODE",
+    })
+    g.add_edge("MEDIA_GROWTH_NODE",  END)
+    g.add_edge("MANUAL_REVIEW_NODE", END)
 
-    Decision tree:
-      is_passed=True                          → SECURITY_NODE
-      is_passed=False + retry < max_retries   → ENGINEERING_NODE or CONTENT_NODE
-      is_passed=False + retry >= max_retries  → MANUAL_REVIEW_NODE
-    """
-    qa_report   = state.get("qa_report") or {}
-    retry_count = state.get("qa_retry_count", 0)
-    max_retries = state.get("qa_max_retries", 3)
-
-    if qa_report.get("is_passed"):
-        log.debug("qa_routing_edge → SECURITY_NODE (passed)")
-        return "SECURITY_NODE"
-
-    if retry_count >= max_retries:
-        log.warning(
-            "qa_routing_edge → MANUAL_REVIEW_NODE (retries exhausted: %d/%d)",
-            retry_count, max_retries,
-        )
-        return "MANUAL_REVIEW_NODE"
-
-    qa_target = state.get("qa_target") or qa_report.get("qa_target", "engineering")
-    if qa_target == "engineering":
-        log.debug("qa_routing_edge → ENGINEERING_NODE (retry %d)", retry_count)
-        return "ENGINEERING_NODE"
-
-    log.debug("qa_routing_edge → CONTENT_NODE (retry %d)", retry_count)
-    return "CONTENT_NODE"
-
-
-def go_decision_edge(
-    state: AgentState,
-) -> Literal["PRODUCT_NODE", END]:
-    """
-    After CEO Node: only proceed to Product if go_decision is True.
-    Prevents low-feasibility ventures from consuming downstream resources.
-    """
-    brief = state.get("venture_brief") or {}
-    if brief.get("go_decision", False):
-        return "PRODUCT_NODE"
-    log.info(
-        "go_decision_edge → END (go=False | niche=%s feasibility=%.2f)",
-        brief.get("niche", "unknown"),
-        brief.get("feasibility_score", 0.0),
-    )
-    return END
-
-
-# ---------------------------------------------------------------------------
-# Graph builder
-# ---------------------------------------------------------------------------
-
-def build_squadron_graph() -> StateGraph:
-    """
-    Assembles and compiles the full AI Squadron LangGraph.
-    Returns a compiled graph ready for .invoke() or .ainvoke().
-
-    Node execution order (happy path):
-    RESEARCH → CEO → PRODUCT → [ENGINEERING|CONTENT] → QA ⟳ → SECURITY → ACCOUNT_DIST → DEPLOYMENT
-                                                              ↓
-                                               MARKETING ← ← ← →  GLOBAL
-                                                          ↘  ↗
-                                                          GROWTH → END
-    """
-    graph: StateGraph = StateGraph(AgentState)
-
-    # ---- Register all nodes ----
-    graph.add_node("RESEARCH_NODE",         market_research_node)
-    graph.add_node("CEO_NODE",            ceo_niche_scout_node)
-    graph.add_node("PRODUCT_NODE",        product_team_node)
-    graph.add_node("ENGINEERING_NODE",    engineering_team_node)
-    graph.add_node("CONTENT_NODE",        content_team_node)
-    graph.add_node("QA_NODE",             qa_auditor_node)
-    graph.add_node("SECURITY_NODE",              security_agent_node)
-    graph.add_node("ACCOUNT_DISTRIBUTION_NODE", account_distribution_node)
-    graph.add_node("DEPLOYMENT_NODE",            deployment_team_node)
-    graph.add_node("MARKETING_NODE",      marketing_team_node)
-    graph.add_node("GLOBAL_NODE",         global_approach_node)
-    graph.add_node("GROWTH_NODE",         growth_team_node)
-    graph.add_node("MANUAL_REVIEW_NODE",  manual_review_node)
-
-    # ---- Set entry point ----
-    graph.set_entry_point("RESEARCH_NODE")
-    graph.add_edge("RESEARCH_NODE", "CEO_NODE")
-
-    # ---- CEO → conditional on go_decision ----
-    graph.add_conditional_edges(
-        "CEO_NODE",
-        go_decision_edge,
-        {"PRODUCT_NODE": "PRODUCT_NODE", END: END},
-    )
-
-    # ---- PRODUCT → branch on venture type ----
-    graph.add_conditional_edges(
-        "PRODUCT_NODE",
-        product_routing_edge,
-        {
-            "ENGINEERING_NODE": "ENGINEERING_NODE",
-            "CONTENT_NODE":     "CONTENT_NODE",
-        },
-    )
-
-    # ---- Both engineering and content paths converge on QA ----
-    graph.add_edge("ENGINEERING_NODE", "QA_NODE")
-    graph.add_edge("CONTENT_NODE",     "QA_NODE")
-
-    # ---- QA → conditional routing (retry loop or proceed) ----
-    graph.add_conditional_edges(
-        "QA_NODE",
-        qa_routing_edge,
-        {
-            "SECURITY_NODE":      "SECURITY_NODE",
-            "ENGINEERING_NODE":   "ENGINEERING_NODE",
-            "CONTENT_NODE":       "CONTENT_NODE",
-            "MANUAL_REVIEW_NODE": "MANUAL_REVIEW_NODE",
-        },
-    )
-
-    # ---- Security → Account Distribution → Deployment ----
-    graph.add_edge("SECURITY_NODE", "ACCOUNT_DISTRIBUTION_NODE")
-    graph.add_edge("ACCOUNT_DISTRIBUTION_NODE", "DEPLOYMENT_NODE")
-
-    # ---- Sequential post-deploy: DEPLOYMENT → MARKETING → GLOBAL → GROWTH ----
-    # Phase 0: sequential to avoid LangGraph concurrent state-update constraints.
-    # Phase 3: convert to parallel using Annotated[list, operator.add] on event_log.
-    graph.add_edge("DEPLOYMENT_NODE", "MARKETING_NODE")
-    graph.add_edge("MARKETING_NODE",  "GLOBAL_NODE")
-    graph.add_edge("GLOBAL_NODE",     "GROWTH_NODE")
-
-    # ---- Growth and Manual Review terminate ----
-    graph.add_edge("GROWTH_NODE",         END)
-    graph.add_edge("MANUAL_REVIEW_NODE",  END)
-
-    compiled = graph.compile()
-    log.info("Squadron graph compiled successfully — %d nodes registered", 13)
+    compiled = g.compile()
+    log.info("Auto-dispatch graph compiled")
     return compiled
 
 
-# Module-level compiled graph — import and use directly
-squadron_graph = build_squadron_graph()
+# ---------------------------------------------------------------------------
+# Edge functions for the auto graph
+# ---------------------------------------------------------------------------
+
+def _ceo_routing_edge(state: AgentState):
+    brief = state.get("venture_brief") or {}
+    if not brief.get("go_decision", False):
+        return END
+    dept = state.get("department", "PRODUCT")
+    return "PRODUCT_VP_NODE" if dept == "PRODUCT" else "MEDIA_VP_NODE"
+
+
+def _product_qa_edge(state: AgentState):
+    qa = state.get("qa_report") or {}
+    retries = state.get("qa_retry_count", 0)
+    if qa.get("is_passed"):
+        return "LEGAL_NODE"
+    if retries >= state.get("qa_max_retries", 3):
+        return "MANUAL_REVIEW_NODE"
+    return "ENGINEERING_NODE"
+
+
+def _media_qa_edge(state: AgentState):
+    qa = state.get("qa_report") or {}
+    retries = state.get("qa_retry_count", 0)
+    if qa.get("is_passed"):
+        return "LEGAL_NODE"
+    if retries >= state.get("qa_max_retries", 3):
+        return "MANUAL_REVIEW_NODE"
+    return "SCRIPT_NODE"
+
+
+def _legal_edge(state: AgentState):
+    clearance = state.get("legal_clearance") or {}
+    return "SECURITY_NODE" if clearance.get("is_cleared", False) else "MANUAL_REVIEW_NODE"
+
+
+def _dept_deploy_edge(state: AgentState):
+    return "DEPLOYMENT_NODE" if state.get("department") == "PRODUCT" else "PUBLISHING_NODE"
+
+
+def _anti_ban_edge(state: AgentState):
+    stage = state.get("pipeline_stage", "")
+    return "MANUAL_REVIEW_NODE" if stage == "MANUAL_REVIEW_NODE" else "MEDIA_GROWTH_NODE"
+
+
+async def _manual_review_node(state: AgentState) -> AgentState:
+    import uuid
+    reason = state.get("manual_review_reason", "Unknown")
+    log.critical("[MANUAL_REVIEW] venture=%s reason=%s", state["venture_id"], reason)
+    try:
+        from packages.revenue.store import enqueue_manual_review
+        enqueue_manual_review({
+            "id": str(uuid.uuid4()), "venture_id": state["venture_id"],
+            "run_id": state["run_id"], "review_reason": reason,
+            "artifact_type": state.get("department", "PRODUCT"),
+            "priority": "CRITICAL",
+        })
+    except Exception:
+        pass
+    return {**state, "pipeline_stage": "MANUAL_REVIEW"}
+
+
+# Module-level graph for backward compatibility
+squadron_graph = build_squadron_graph("AUTO")
