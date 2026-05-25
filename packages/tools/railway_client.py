@@ -29,6 +29,10 @@ import httpx
 
 log = logging.getLogger(__name__)
 
+
+def _ssl_verify() -> bool:
+    return os.getenv("HTTPX_SSL_VERIFY", "true").lower() != "false"
+
 _GRAPHQL_URL   = "https://backboard.railway.app/graphql/v2"
 _UPLOAD_URL    = "https://backboard.railway.app/deployments/uploads"
 _POLL_INTERVAL = 5    # seconds between status checks
@@ -59,7 +63,7 @@ async def deploy_to_railway(venture_id: str, build_dir: Path) -> str:
     project_name = "ai-squadron"
     service_name = venture_id[:30]
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, verify=_ssl_verify()) as client:
         project_id, env_id = await _get_or_create_project(client, token, project_name)
         service_id         = await _get_or_create_service(client, token, project_id, service_name)
         log.info("[RAILWAY] project=%s service=%s env=%s",
@@ -232,6 +236,7 @@ async def _upload_tarball(
         files={"file": ("source.tar.gz", tarball, "application/gzip")},
         headers={"Authorization": f"Bearer {token}"},
         timeout=120.0,
+        verify=_ssl_verify(),
     )
     resp.raise_for_status()
     data = resp.json()

@@ -93,6 +93,7 @@ def main() -> None:
             "grant_type":    "authorization_code",
         },
         timeout=30.0,
+        verify=False,   # corporate SSL proxy uses self-signed cert
     )
 
     if resp.status_code != 200:

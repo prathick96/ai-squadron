@@ -31,6 +31,11 @@ import httpx
 
 log = logging.getLogger(__name__)
 
+# Corporate SSL proxies intercept HTTPS with a self-signed cert that Python
+# doesn't trust by default.  Set HTTPX_SSL_VERIFY=false in .env to bypass.
+def _ssl_verify() -> bool:
+    return os.getenv("HTTPX_SSL_VERIFY", "true").lower() != "false"
+
 _TOKEN_URL  = "https://oauth2.googleapis.com/token"
 _UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
 
@@ -89,7 +94,7 @@ async def upload_video(
 
 async def _refresh_access_token() -> str:
     """Exchange refresh_token for a short-lived access_token."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, verify=_ssl_verify()) as client:
         resp = await client.post(
             _TOKEN_URL,
             data={
@@ -126,7 +131,7 @@ async def _create_upload_session(
     Initiate a resumable upload session.
     Returns the upload URI from the Location header.
     """
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, verify=_ssl_verify()) as client:
         resp = await client.post(
             _UPLOAD_URL,
             params={"uploadType": "resumable", "part": "snippet,status"},
@@ -174,7 +179,7 @@ async def _stream_upload(
     Returns the video_id on success.
     """
     with open(video_path, "rb") as fh:
-        async with httpx.AsyncClient(timeout=600.0) as client:
+        async with httpx.AsyncClient(timeout=600.0, verify=_ssl_verify()) as client:
             resp = await client.put(
                 upload_uri,
                 content=fh,
