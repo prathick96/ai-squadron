@@ -55,6 +55,7 @@ _SCAFFOLD: dict[str, str] = {
             "build": "vite build",
             "preview": "vite preview",
             "typecheck": "tsc --noEmit",
+            "start": "serve -s dist --listen $PORT",
         },
         "dependencies": {
             "@supabase/supabase-js": "^2.45.0",
@@ -62,6 +63,7 @@ _SCAFFOLD: dict[str, str] = {
             "react": "^19.0.0",
             "react-dom": "^19.0.0",
             "react-router-dom": "^6.28.0",
+            "serve": "^14.2.0",
         },
         "devDependencies": {
             "@types/react": "^19.0.0",
@@ -308,6 +310,7 @@ async def engineering_team_node(state: AgentState) -> AgentState:
 _SCAFFOLD_DEPS = [
     "react@19", "react-dom@19", "react-router-dom@6",
     "@tanstack/react-query@5", "@supabase/supabase-js@2",
+    "serve@14",
     "vite@6", "@vitejs/plugin-react", "typescript@5",
 ]
 
