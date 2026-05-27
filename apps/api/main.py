@@ -16,6 +16,8 @@ from typing import Literal
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -371,3 +373,24 @@ async def ws_live(websocket: WebSocket) -> None:
             await asyncio.sleep(5)
     except WebSocketDisconnect:
         log.debug("WebSocket client disconnected")
+
+
+# ---------------------------------------------------------------------------
+# SPA static file serving (Week 7)
+# Registered LAST so API routes always take priority.
+# Only activates when frontend/dist exists (i.e. after `npm run build`).
+# In local dev, Vite runs separately on port 5173.
+# ---------------------------------------------------------------------------
+
+_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if _dist.exists():
+    _assets = _dist / "assets"
+    if _assets.exists():
+        app.mount("/assets", StaticFiles(directory=str(_assets)), name="static-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str) -> FileResponse:
+        candidate = _dist / full_path
+        if candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(_dist / "index.html"))

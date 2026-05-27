@@ -308,8 +308,9 @@ export default function App() {
 
   useEffect(() => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = window.location.hostname;
-    const ws = new WebSocket(`${proto}//${host}:8000/api/ws/live`);
+    // window.location.host includes port when non-standard (e.g. localhost:5173 in dev).
+    // In production (Railway HTTPS/443) it's just the hostname — no :PORT needed.
+    const ws = new WebSocket(`${proto}//${window.location.host}/api/ws/live`);
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);

@@ -6,11 +6,10 @@ Autonomous venture orchestration system. Two parallel departments (Product + Med
 ## Running the Project
 
 ```bash
-# Install dependencies (from backend/)
-cd backend && pip install -e ".[dev,api]"
+# Install dependencies (from repo root)
+pip install -e ".[dev]"
 
-# Dry-run (validates all imports, no LLM calls) — run from backend/
-cd backend
+# Dry-run (validates all imports, no LLM calls)
 python -m apps.orchestrator.main --mode dry-run
 
 # Run product pipeline (SaaS builds)
@@ -22,48 +21,56 @@ python -m apps.orchestrator.main --mode single --department media
 # Revenue Engine
 python apps/revenue-engine/main.py --mode once
 
-# Command Center API
+# Command Center API (development)
 uvicorn apps.api.main:app --reload --port 8000
 
-# Command Center UI (from frontend/)
+# Command Center UI (development — separate Vite dev server)
 cd frontend && npm install && npm run dev
 
-# Tests (from backend/)
-cd backend && pytest tests/ -v
+# Tests (from repo root)
+pytest tests/ -v
+TRENDS_LIVE=false pytest tests/ -v   # no external API calls
 ```
 
 ## Directory Structure
 
 ```
-backend/
-  packages/
-    agents/
-      governance/   — Grand CEO + Global Research Council (5 scouts + debate)
-      product/      — Product VP, Manager, Engineering, QA, Deploy, Marketing, Growth
-      media/        — Media VP, Script, Voice, Video, Thumbnail, SEO, QA, Publish, Analytics
-      shared/       — Legal Agent, Security, Anti-Ban, Credential Guardian, Account Distribution
-    schemas/        — Pydantic event models (EventEnvelope + all payload types)
-    state/          — AgentState TypedDict (shared across all nodes)
-    tools/          — LLM router, pytrends, Tavily
-    db/             — Supabase client + migrations
-    revenue/        — Revenue Engine: Stripe sync, AdSense sync, confidence, scorecards
-    bus/            — Event bus (Redis Streams prod / asyncio.Queue dev)
-    config/         — Settings
-  apps/
-    orchestrator/
-      product_graph.py   — Product department LangGraph pipeline
-      media_graph.py     — Media department LangGraph pipeline
-      graph.py           — Dispatcher (imports both sub-graphs)
-      main.py            — CLI entry: --mode, --department flags
-    api/            — FastAPI dashboard API
-    revenue-engine/ — Daily cron service
-  tests/            — Pytest suite
-  pyproject.toml    — Python package definition
+packages/
+  agents/
+    governance/   — Grand CEO + Global Research Council (5 scouts + debate)
+    product/      — Product VP, Manager, Engineering, QA, Deploy, Marketing, Growth
+    media/        — Media VP, Script, Voice, Video, Thumbnail, SEO, QA, Publish, Analytics
+    shared/       — Legal Agent, Security, Anti-Ban, Credential Guardian, Account Distribution
+  schemas/        — Pydantic event models (EventEnvelope + all payload types)
+  state/          — AgentState TypedDict (shared across all nodes)
+  tools/          — LLM router, pytrends, Tavily, ElevenLabs, Railway API, YouTube
+  db/             — Supabase client + migrations
+  revenue/        — Revenue Engine: Stripe sync, AdSense sync, confidence, scorecards
+  bus/            — Event bus (Redis Streams prod / asyncio.Queue dev)
+  config/         — Settings
+  orchestrator/   — In-memory run registry (RunRecord, registry singleton)
 
-frontend/           — React 19 war room dashboard (Vite)
+apps/
+  orchestrator/
+    product_graph.py   — Product department LangGraph pipeline
+    media_graph.py     — Media department LangGraph pipeline
+    graph.py           — Dispatcher (imports both sub-graphs)
+    main.py            — CLI entry: --mode, --department flags
+  api/            — FastAPI dashboard API + serves frontend/dist in production
+  revenue-engine/ — Daily cron service
 
-infra/              — Docker Compose files for local dev
-builds/             — Generated SaaS code (gitignored, written by Engineering agent)
+frontend/         — React 19 war room dashboard (Vite + TypeScript)
+  src/
+    App.tsx       — Main dashboard UI
+    api.ts        — Typed API client (uses VITE_API_URL env var, defaults to same-origin)
+
+tests/            — Pytest suite
+pyproject.toml    — Python package definition
+requirements.txt  — Flat deps list (Railpack/Nixpacks install trigger)
+nixpacks.toml     — Multi-language build config for Railway (Python + Node)
+railway.toml      — Railway deployment config
+
+builds/           — Generated SaaS code (gitignored, written by Engineering agent)
 ```
 
 ## Agent Model Assignments
@@ -105,21 +112,19 @@ STRIPE_SECRET_KEY=       # Required for Stripe revenue sync
 TRENDS_LIVE=true         # Set false to use mock trend data in tests
 ```
 
-## Testing
+## Railway deployment
 
-```bash
-cd backend
-pytest tests/ -v                         # All tests
-pytest tests/test_graph.py -v            # Graph compilation tests
-pytest tests/test_schemas.py -v          # Schema validation
-TRENDS_LIVE=false pytest tests/ -v       # No external API calls
-```
+The API and frontend are served from a single Railway service (cost-efficient):
+- Nixpacks builds both: `pip install -r requirements.txt` + `npm run build` in `frontend/`
+- In production, FastAPI serves the React build from `frontend/dist/`
+- Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in Railway env vars to connect real data
+- All other env vars are optional; missing keys fall back to mock/local data
 
 ## Adding a New Agent
 
-1. Create file in the correct department subpackage under `backend/packages/agents/`
+1. Create file in the correct department subpackage under `packages/agents/`
 2. Implement `async def {name}_node(state: AgentState) -> AgentState`
-3. Add agent role to `MODEL_REGISTRY` in `backend/packages/tools/llm.py`
-4. Add `AgentID.{NAME}` to `backend/packages/schemas/events.py`
-5. Register node in the appropriate graph (`backend/apps/orchestrator/product_graph.py` or `media_graph.py`)
-6. Add test in `backend/tests/`
+3. Add agent role to `MODEL_REGISTRY` in `packages/tools/llm.py`
+4. Add `AgentID.{NAME}` to `packages/schemas/events.py`
+5. Register node in the appropriate graph (`apps/orchestrator/product_graph.py` or `media_graph.py`)
+6. Add test in `tests/`
