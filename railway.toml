@@ -3,25 +3,22 @@
 #
 # DESIGN RATIONALE — why each line is here:
 #
-# No [build] buildCommand:
-#   Railpack 0.23 does NOT recognize pyproject.toml as a pip install trigger.
-#   It only shows Python in its Packages plan — zero pip packages — so
-#   buildCommand is silently ignored (no build phase exists to attach to).
-#   Adding requirements.txt is the fix: Railpack 0.23 auto-detects it and
-#   adds a `pip install -r requirements.txt` step to the plan automatically.
+# builder = "NIXPACKS"
+#   Week 7 added a React frontend build step (Node 20 + npm).
+#   Railpack 0.23 only handles Python; Nixpacks handles multi-language builds.
+#   nixpacks.toml defines the setup/install/build phases explicitly.
 #
-# [deploy] startCommand
+# startCommand
 #   `python -m uvicorn` instead of bare `uvicorn`: mise's Python bin/ dir is
 #   not on PATH in the deploy image, so the uvicorn entry-point script fails.
-#   `python -m uvicorn` uses whatever Python is on PATH, which always resolves
-#   to the interpreter that owns the installed packages.
+#   `python -m uvicorn` uses whatever Python is on PATH.
 #
-#   --loop asyncio: uvloop (from uvicorn[standard]) crashes inside Railway's
-#   container seccomp profile.  We install plain uvicorn (no [standard]) so
-#   uvloop is absent, but the flag is kept as an explicit safety net.
-#
-#   --http h11: httptools (also from uvicorn[standard]) is absent; h11 is the
+#   --loop asyncio: uvloop crashes inside Railway's container seccomp profile.
+#   --http h11: httptools is absent (no uvicorn[standard]); h11 is the
 #   pure-Python fallback that is always available.
+
+[build]
+builder = "NIXPACKS"
 
 [deploy]
 startCommand = "python -m uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --loop asyncio --http h11"

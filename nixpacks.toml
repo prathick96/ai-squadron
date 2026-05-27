@@ -1,0 +1,15 @@
+# nixpacks.toml — multi-language build: Python 3.11 + Node 20
+# Nixpacks auto-detects Python from .python-version; we add Node.js explicitly.
+# [phases.install] replaces auto-detection so we control both pip and npm.
+
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = [
+  "pip install -r requirements.txt",
+  "npm --prefix frontend install"
+]
+
+[phases.build]
+cmds = ["npm --prefix frontend run build"]
