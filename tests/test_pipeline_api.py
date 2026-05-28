@@ -136,7 +136,7 @@ def test_health_endpoint():
     body = resp.json()
     assert body["status"] == "ok"
     assert "active_pipeline_runs" in body
-    assert body["version"] == "0.3.0"
+    assert body["version"] == "0.4.0"
 
 
 def test_pipeline_run_endpoint_returns_run_id():

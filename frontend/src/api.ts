@@ -44,6 +44,19 @@ export type ConfidenceReport = {
   kill_ventures: string[];
 };
 
+export type LedgerEntry = {
+  venture_id: string;
+  period_start: string;
+  period_end: string;
+  revenue_source: "STRIPE" | "ADSENSE" | "MANUAL";
+  amount_usd: number;
+  burn_usd: number;
+  notes: string;
+  created_at?: string;
+};
+
+export type LedgerEntryBody = Omit<LedgerEntry, "created_at">;
+
 export type ManualReviewItem = {
   id?: string;
   venture_id: string;
@@ -117,6 +130,14 @@ export const api = {
   manualReview: () =>
     get<{ items: ManualReviewItem[]; count: number }>("/api/manual-review"),
   runRevenueCycle: () => post<unknown>("/api/revenue/run-cycle", {}),
+
+  // Week 8 — ledger read/write
+  ledger: (venture_id?: string) =>
+    get<{ entries: LedgerEntry[]; count: number }>(
+      venture_id ? `/api/revenue/ledger?venture_id=${encodeURIComponent(venture_id)}` : "/api/revenue/ledger",
+    ),
+  addLedgerEntry: (body: LedgerEntryBody) =>
+    post<{ ok: boolean; entry: LedgerEntry }>("/api/revenue/ledger", body),
 
   // Week 5 — pipeline control
   pipelineRun: (department: "PRODUCT" | "MEDIA" | "AUTO" = "AUTO", venture_id?: string) =>

@@ -11,6 +11,8 @@ import json
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -39,10 +41,35 @@ from packages.orchestrator.runner import RunRecord, registry
 
 log = logging.getLogger("squadron.api")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler = None
+    if os.getenv("ENVIRONMENT") == "production":
+        try:
+            from apscheduler.schedulers.asyncio import AsyncIOScheduler
+            from packages.revenue.cycle import run_day2_cycle
+
+            scheduler = AsyncIOScheduler(timezone="UTC")
+            scheduler.add_job(run_day2_cycle, "cron", hour=0, minute=0,
+                              id="revenue_cycle", replace_existing=True)
+            scheduler.add_job(run_day2_cycle, "cron", day_of_week="mon", hour=8, minute=0,
+                              id="confidence_weekly", replace_existing=True)
+            scheduler.start()
+            log.info("Revenue Engine scheduler started (daily 00:00 UTC + Monday 08:00 UTC)")
+        except ImportError:
+            log.warning("APScheduler not installed — revenue scheduler not started")
+    yield
+    if scheduler:
+        scheduler.shutdown()
+        log.info("Revenue Engine scheduler stopped")
+
+
 app = FastAPI(
     title="AI Squadron Command Center API",
-    version="0.3.0",
+    version="0.4.0",
     description="Agent health, revenue truth, confidence forecasts, manual review queue, pipeline control.",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -66,6 +93,16 @@ class ReviewResolveBody(BaseModel):
 class PipelineRunBody(BaseModel):
     department: Literal["PRODUCT", "MEDIA", "AUTO"] = "AUTO"
     venture_id: str | None = None
+
+
+class LedgerEntryBody(BaseModel):
+    venture_id: str
+    period_start: str  # YYYY-MM-DD
+    period_end: str    # YYYY-MM-DD
+    revenue_source: Literal["STRIPE", "ADSENSE", "MANUAL"]
+    amount_usd: float
+    burn_usd: float = 0.0
+    notes: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +233,7 @@ def health() -> dict:
     return {
         "status": "ok",
         "service": "command-center-api",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "storage": storage,
         "active_pipeline_runs": active,
     }
@@ -275,6 +312,32 @@ def resolve_review(review_id: str, body: ReviewResolveBody) -> dict:
 async def trigger_cycle() -> dict:
     from packages.revenue.cycle import run_day2_cycle
     return await run_day2_cycle()
+
+
+@app.get("/api/revenue/ledger")
+def get_ledger(venture_id: str | None = None) -> dict:
+    from packages.revenue.store import list_ledger
+    entries = list_ledger()
+    if venture_id:
+        entries = [e for e in entries if e.get("venture_id") == venture_id]
+    return {"entries": entries, "count": len(entries)}
+
+
+@app.post("/api/revenue/ledger")
+def add_ledger_entry(body: LedgerEntryBody) -> dict:
+    from packages.revenue.store import upsert_ledger_row
+    row = {
+        "venture_id": body.venture_id,
+        "period_start": body.period_start,
+        "period_end": body.period_end,
+        "revenue_source": body.revenue_source,
+        "amount_usd": body.amount_usd,
+        "burn_usd": body.burn_usd,
+        "notes": body.notes,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    upsert_ledger_row(row)
+    return {"ok": True, "entry": row}
 
 
 @app.get("/api/portfolio")

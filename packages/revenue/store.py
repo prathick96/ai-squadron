@@ -91,7 +91,9 @@ def upsert_ledger_row(row: dict[str, Any]) -> None:
         _save_local(data)
         return
     db = __import__("packages.db.client", fromlist=["get_db"]).get_db()
-    db.table("revenue_ledger").upsert(row).execute()
+    db.table("revenue_ledger").upsert(
+        row, on_conflict="venture_id,period_start,revenue_source"
+    ).execute()
 
 
 def list_qa_reports() -> list[dict[str, Any]]:
