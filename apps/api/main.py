@@ -204,9 +204,13 @@ def health() -> dict:
 
 @app.get("/api/agents")
 def get_agents() -> dict:
+    from packages.db.client import is_supabase_connected
     live = _try_supabase_agents()
-    agents = live if live else agent_grid()
-    return {"agents": agents, "source": "supabase" if live else "mock"}
+    if live:
+        return {"agents": live, "source": "supabase"}
+    # Supabase connected but agent_logs is empty (no pipeline runs yet)
+    source = "supabase_empty" if is_supabase_connected() else "mock"
+    return {"agents": agent_grid(), "source": source}
 
 
 @app.get("/api/revenue")
