@@ -65,7 +65,7 @@ class _NullTable:
         log.debug("[NullDB] INSERT %s: %s", self._name, list(data.keys()))
         return self
 
-    def upsert(self, data: dict[str, Any]) -> "_NullTable":
+    def upsert(self, data: dict[str, Any], **kwargs) -> "_NullTable":
         log.debug("[NullDB] UPSERT %s: %s", self._name, list(data.keys()))
         return self
 

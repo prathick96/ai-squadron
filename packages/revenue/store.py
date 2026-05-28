@@ -72,9 +72,13 @@ def list_ventures() -> list[dict[str, Any]]:
 def list_ledger() -> list[dict[str, Any]]:
     if is_local_mode():
         return _load_local().get("revenue_ledger", [])
-    db = __import__("packages.db.client", fromlist=["get_db"]).get_db()
-    result = db.table("revenue_ledger").select("*").execute()
-    return result.data or []
+    try:
+        db = __import__("packages.db.client", fromlist=["get_db"]).get_db()
+        result = db.table("revenue_ledger").select("*").execute()
+        return result.data or []
+    except Exception as exc:
+        log.warning("Supabase revenue_ledger read failed (%s) — run migration 001. Falling back to local.", exc)
+        return _load_local().get("revenue_ledger", [])
 
 
 def upsert_ledger_row(row: dict[str, Any]) -> None:
@@ -90,10 +94,19 @@ def upsert_ledger_row(row: dict[str, Any]) -> None:
         ledger.append(row)
         _save_local(data)
         return
-    db = __import__("packages.db.client", fromlist=["get_db"]).get_db()
-    db.table("revenue_ledger").upsert(
-        row, on_conflict="venture_id,period_start,revenue_source"
-    ).execute()
+    try:
+        db = __import__("packages.db.client", fromlist=["get_db"]).get_db()
+        db.table("revenue_ledger").upsert(
+            row, on_conflict="venture_id,period_start,revenue_source"
+        ).execute()
+    except Exception as exc:
+        log.warning("Supabase revenue_ledger upsert failed (%s) — saving to local store instead.", exc)
+        data = _load_local()
+        ledger = data.setdefault("revenue_ledger", [])
+        key = (row["venture_id"], row["period_start"], row["revenue_source"])
+        ledger[:] = [r for r in ledger if (r.get("venture_id"), r.get("period_start"), r.get("revenue_source")) != key]
+        ledger.append(row)
+        _save_local(data)
 
 
 def list_qa_reports() -> list[dict[str, Any]]:
