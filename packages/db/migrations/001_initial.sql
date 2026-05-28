@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS revenue_ledger (
     period_start    DATE NOT NULL,
     period_end      DATE NOT NULL,
     revenue_source  VARCHAR(32) NOT NULL
-                    CHECK (revenue_source IN ('ADSENSE','STRIPE','AFFILIATE','OTHER')),
+                    CHECK (revenue_source IN ('ADSENSE','STRIPE','AFFILIATE','OTHER','MANUAL')),
     amount_usd      NUMERIC(12,2) NOT NULL DEFAULT 0,
     burn_usd        NUMERIC(12,2) NOT NULL DEFAULT 0,
     recorded_at     TIMESTAMPTZ DEFAULT NOW(),
@@ -144,6 +144,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS ventures_updated_at ON ventures;
 CREATE TRIGGER ventures_updated_at
     BEFORE UPDATE ON ventures
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
