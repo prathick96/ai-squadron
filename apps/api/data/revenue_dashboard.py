@@ -20,6 +20,7 @@ def live_revenue_summary() -> dict | None:
         key = "stripe" if src == "stripe" else "adsense" if src == "adsense" else "affiliate" if src == "affiliate" else "other"
         by_source[key] += float(row.get("amount_usd", 0))
 
+    latest = store.latest_confidence_report()
     return {
         "mrr_usd": round(mrr, 2),
         "arr_usd": round(mrr * 12, 2),
@@ -27,7 +28,7 @@ def live_revenue_summary() -> dict | None:
         "net_mrr_usd": round(mrr - burn, 2),
         "burn_earn_ratio": round(burn / mrr, 4) if mrr > 0 else 0.0,
         "by_source": by_source,
-        "updated_at": store.latest_confidence_report().get("created_at") if store.latest_confidence_report() else None,
+        "updated_at": latest.get("created_at") if latest else None,
     }
 
 

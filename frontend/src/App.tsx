@@ -3,6 +3,8 @@ import {
   api,
   type AgentRow,
   type ConfidenceReport,
+  type LedgerEntry,
+  type LedgerEntryBody,
   type ManualReviewItem,
   type PipelineRun,
   type PortfolioSlot,
@@ -188,6 +190,53 @@ export default function App() {
   const [dataSource, setDataSource] = useState("mock");
   const [lastTick, setLastTick] = useState<string>("");
 
+  // Week 8 — revenue ledger state
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [ledgerForm, setLedgerForm] = useState<LedgerEntryBody>({
+    venture_id: "",
+    period_start: new Date().toISOString().slice(0, 7) + "-01",
+    period_end: new Date().toISOString().slice(0, 10),
+    revenue_source: "MANUAL",
+    amount_usd: 0,
+    burn_usd: 0,
+    notes: "",
+  });
+  const [ledgerSubmitting, setLedgerSubmitting] = useState(false);
+  const [ledgerError, setLedgerError] = useState<string | null>(null);
+  const [ledgerSuccess, setLedgerSuccess] = useState(false);
+
+  const refreshLedger = useCallback(async () => {
+    try {
+      const res = await api.ledger();
+      setLedgerEntries(res.entries);
+    } catch {
+      /* silent */
+    }
+  }, []);
+
+  const submitLedgerEntry = useCallback(async () => {
+    if (!ledgerForm.venture_id.trim()) {
+      setLedgerError("venture_id is required");
+      return;
+    }
+    if (ledgerForm.amount_usd < 0) {
+      setLedgerError("amount_usd must be ≥ 0");
+      return;
+    }
+    setLedgerSubmitting(true);
+    setLedgerError(null);
+    setLedgerSuccess(false);
+    try {
+      await api.addLedgerEntry(ledgerForm);
+      setLedgerSuccess(true);
+      await refreshLedger();
+    } catch (e) {
+      setLedgerError(e instanceof Error ? e.message : "Submit failed");
+    } finally {
+      setLedgerSubmitting(false);
+    }
+  }, [ledgerForm, refreshLedger]);
+
   // Week 5 — pipeline control state
   const [pipelineDept, setPipelineDept] = useState<"PRODUCT" | "MEDIA" | "AUTO">("AUTO");
   const [launching, setLaunching] = useState(false);
@@ -302,9 +351,10 @@ export default function App() {
   useEffect(() => {
     refresh();
     refreshRecentRuns();
+    refreshLedger();
     const id = setInterval(refresh, 8000);
     return () => clearInterval(id);
-  }, [refresh, refreshRecentRuns]);
+  }, [refresh, refreshRecentRuns, refreshLedger]);
 
   useEffect(() => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -557,6 +607,166 @@ export default function App() {
           <span className="DEVELOPMENT">Development</span>
           <span className="LIVE">Live</span>
         </div>
+      </section>
+
+      {/* Week 8 — Manual Revenue Entry + Ledger */}
+      <section className="panel" style={{ marginTop: "1rem" }}>
+        <h2>Revenue Ledger</h2>
+
+        {/* Entry form */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+            gap: 8,
+            marginBottom: 12,
+          }}
+        >
+          {(
+            [
+              ["venture_id", "Venture ID", "text"],
+              ["period_start", "Period Start", "date"],
+              ["period_end", "Period End", "date"],
+              ["amount_usd", "Amount (USD)", "number"],
+              ["burn_usd", "Burn (USD)", "number"],
+            ] as [keyof LedgerEntryBody, string, string][]
+          ).map(([field, label, type]) => (
+            <label key={field} style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.78rem" }}>
+              <span style={{ color: "var(--muted)" }}>{label}</span>
+              <input
+                type={type}
+                value={String(ledgerForm[field])}
+                onChange={(e) =>
+                  setLedgerForm((prev) => ({
+                    ...prev,
+                    [field]: type === "number" ? parseFloat(e.target.value) || 0 : e.target.value,
+                  }))
+                }
+                style={{
+                  background: "#111",
+                  border: "1px solid var(--border)",
+                  borderRadius: 4,
+                  color: "var(--fg)",
+                  padding: "4px 6px",
+                  fontSize: "0.8rem",
+                  fontFamily: "monospace",
+                }}
+              />
+            </label>
+          ))}
+          <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.78rem" }}>
+            <span style={{ color: "var(--muted)" }}>Source</span>
+            <select
+              value={ledgerForm.revenue_source}
+              onChange={(e) =>
+                setLedgerForm((prev) => ({
+                  ...prev,
+                  revenue_source: e.target.value as LedgerEntryBody["revenue_source"],
+                }))
+              }
+              style={{
+                background: "#111",
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+                color: "var(--fg)",
+                padding: "4px 6px",
+                fontSize: "0.8rem",
+              }}
+            >
+              <option value="MANUAL">MANUAL</option>
+              <option value="STRIPE">STRIPE</option>
+              <option value="ADSENSE">ADSENSE</option>
+            </select>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.78rem", gridColumn: "span 2" }}>
+            <span style={{ color: "var(--muted)" }}>Notes</span>
+            <input
+              type="text"
+              value={ledgerForm.notes}
+              onChange={(e) => setLedgerForm((prev) => ({ ...prev, notes: e.target.value }))}
+              placeholder="Optional notes"
+              style={{
+                background: "#111",
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+                color: "var(--fg)",
+                padding: "4px 6px",
+                fontSize: "0.8rem",
+                fontFamily: "monospace",
+              }}
+            />
+          </label>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+          <button
+            onClick={submitLedgerEntry}
+            disabled={ledgerSubmitting}
+            style={{
+              background: ledgerSubmitting ? "#333" : "var(--accent)",
+              color: ledgerSubmitting ? "var(--muted)" : "#000",
+              border: "none",
+              borderRadius: 4,
+              padding: "6px 16px",
+              fontSize: "0.82rem",
+              fontWeight: 700,
+              cursor: ledgerSubmitting ? "not-allowed" : "pointer",
+              fontFamily: "monospace",
+            }}
+          >
+            {ledgerSubmitting ? "Saving…" : "Add Entry"}
+          </button>
+          {ledgerSuccess && (
+            <span style={{ color: "var(--accent)", fontSize: "0.78rem" }}>Saved</span>
+          )}
+          {ledgerError && (
+            <span style={{ color: "#f66", fontSize: "0.78rem" }}>⚠ {ledgerError}</span>
+          )}
+        </div>
+
+        {/* Ledger table */}
+        {ledgerEntries.length === 0 ? (
+          <p style={{ color: "var(--muted)", fontSize: "0.82rem" }}>
+            No ledger entries yet. Add a Stripe, AdSense, or manual revenue record above.
+          </p>
+        ) : (
+          <table className="agent-table">
+            <thead>
+              <tr>
+                <th>Venture</th>
+                <th>Period</th>
+                <th>Source</th>
+                <th>Amount</th>
+                <th>Burn</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ledgerEntries.slice(-50).reverse().map((e, i) => (
+                <tr key={i}>
+                  <td className="mono">{e.venture_id}</td>
+                  <td className="mono" style={{ fontSize: "0.72rem" }}>
+                    {e.period_start} → {e.period_end}
+                  </td>
+                  <td>
+                    <span className={`badge ${e.revenue_source === "STRIPE" ? "RUNNING" : e.revenue_source === "ADSENSE" ? "COMPLETED" : "STARTED"}`}>
+                      {e.revenue_source}
+                    </span>
+                  </td>
+                  <td className="mono" style={{ color: "var(--accent)" }}>
+                    {formatUsd(e.amount_usd)}
+                  </td>
+                  <td className="mono" style={{ color: "#f88" }}>
+                    {formatUsd(e.burn_usd)}
+                  </td>
+                  <td style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
+                    {e.notes || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </section>
     </div>
   );
