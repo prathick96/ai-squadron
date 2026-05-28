@@ -1,18 +1,23 @@
 # nixpacks.toml — multi-language build: Python 3.11 + Node 20
 #
-# [phases.install] is intentionally NOT defined.
-# Nixpacks auto-detects Python from .python-version and requirements.txt,
-# creates /opt/venv, and runs pip install automatically — overriding that
-# phase caused "pip: command not found" because our cmd ran before the
-# venv's PATH was activated.
+# Problem history:
+#   Attempt 1: overrode install with `pip install` → "pip: command not found"
+#              (pip is at /opt/venv/bin/pip, not on PATH during build RUN steps)
+#   Attempt 2: let Nixpacks auto-handle install → "python: command not found"
+#              (nix installs python as python3.11, Nixpacks generated `python -m venv`)
 #
-# We only add nodejs_20 to setup and handle the npm steps in build phase.
+# Fix: explicitly install python311 so we know the binary name (python3.11),
+# create the venv ourselves, and reference pip by its full venv path.
 
 [phases.setup]
-nixPkgs = ["nodejs_20"]
+nixPkgs = ["python311", "nodejs_20"]
+
+[phases.install]
+cmds = [
+  "python3.11 -m venv /opt/venv",
+  "/opt/venv/bin/pip install -r requirements.txt",
+  "npm --prefix frontend install"
+]
 
 [phases.build]
-cmds = [
-  "npm --prefix frontend install",
-  "npm --prefix frontend run build"
-]
+cmds = ["npm --prefix frontend run build"]
