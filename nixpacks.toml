@@ -1,15 +1,18 @@
 # nixpacks.toml — multi-language build: Python 3.11 + Node 20
-# Nixpacks auto-detects Python from .python-version; we add Node.js explicitly.
-# [phases.install] replaces auto-detection so we control both pip and npm.
+#
+# [phases.install] is intentionally NOT defined.
+# Nixpacks auto-detects Python from .python-version and requirements.txt,
+# creates /opt/venv, and runs pip install automatically — overriding that
+# phase caused "pip: command not found" because our cmd ran before the
+# venv's PATH was activated.
+#
+# We only add nodejs_20 to setup and handle the npm steps in build phase.
 
 [phases.setup]
 nixPkgs = ["nodejs_20"]
 
-[phases.install]
-cmds = [
-  "pip install -r requirements.txt",
-  "npm --prefix frontend install"
-]
-
 [phases.build]
-cmds = ["npm --prefix frontend run build"]
+cmds = [
+  "npm --prefix frontend install",
+  "npm --prefix frontend run build"
+]
