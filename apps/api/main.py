@@ -128,15 +128,27 @@ def _run_to_dict(rec: RunRecord) -> dict:
 async def _run_pipeline_background(state: dict, department: str) -> None:
     """Background task: stream the full pipeline and push updates to the registry."""
     from apps.orchestrator.graph import build_squadron_graph
+    from packages.db.client import upsert_venture
     from packages.db.pipeline import begin_pipeline_run, complete_pipeline_run, persist_event_log
 
     run_id = state["run_id"]
     venture_id = state["venture_id"]
 
-    begin_pipeline_run(run_id, venture_id)
+    # Upsert venture row BEFORE pipeline_runs (FK constraint requires it to exist first).
+    try:
+        upsert_venture({
+            "venture_id": venture_id,
+            "venture_type": "MICRO_SAAS",
+            "niche": "pending",
+            "status": "DEVELOPMENT",
+        })
+    except Exception as exc:
+        log.debug("[PIPELINE_BG] venture pre-upsert skipped: %s", exc)
+
     final_state: dict = dict(state)
 
     try:
+        begin_pipeline_run(run_id, venture_id)
         graph = build_squadron_graph(department)
 
         # Stream node-by-node: each chunk is {node_name: state_updates}
