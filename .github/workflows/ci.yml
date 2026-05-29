@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run test suite
+        env:
+          # Disable live external API calls so tests are hermetic
+          TRENDS_LIVE: "false"
+          # Supabase not configured → NullDB fallback (all writes are no-ops)
+          # No GEMINI_API_KEY / ANTHROPIC_API_KEY → LLM tests check for env errors
+          # No PLAYWRIGHT → playwright_runner returns (True, ["playwright_skip"])
+        run: pytest tests/ -v --tb=short --no-header
+
+      - name: Lint (ruff)
+        run: |
+          pip install ruff
+          ruff check packages/ apps/ tests/ --select E,F,W --ignore E501

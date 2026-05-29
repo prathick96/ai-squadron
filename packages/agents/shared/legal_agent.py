@@ -2,7 +2,7 @@
 packages/agents/shared/legal_agent.py
 Legal & Compliance Agent — veto authority over all deployments.
 
-Model:   gemini-2.5-pro (legal reasoning requires top-tier model)
+Model:   gemini-2.0-flash (swap to 2.5-pro once key has Pro access)
 Input:   Build artifact (product) or Content package (media) + platform context
 Output:  LegalClearance — cleared or denied with specific clause references
 
@@ -357,15 +357,58 @@ def _persist_legal_clearance(
 
 async def refresh_tos_snapshots() -> dict[str, str]:
     """
-    Weekly job: fetch current ToS pages and store diffs.
+    Weekly job: compare platform ToS pages against cached hashes via Tavily.
     Called by Revenue Engine scheduler (Monday 08:00 UTC).
-    Phase 1: stub — returns current in-memory snapshot versions.
-    Phase 2: wire Tavily to fetch and diff actual ToS pages.
+
+    When TAVILY_API_KEY is set: searches for each platform's ToS and computes
+    a content hash to detect changes since the last refresh.
+    When absent: returns the hardcoded baseline versions — no alert is raised.
+
+    A WARNING log is emitted whenever the hash changes so the operator can
+    manually review the diff before the next deployment.
     """
+    import hashlib
+
+    from packages.tools.tavily_client import search_niche_intelligence, tavily_available
+
     log.info("[LEGAL] ToS snapshot refresh started")
+
+    if not tavily_available():
+        versions = {p: r.get("tos_version", "unknown")
+                    for p, r in _PLATFORM_RULES.items()}
+        log.info("[LEGAL] TAVILY_API_KEY not set — returning cached versions: %s", versions)
+        return versions
+
     versions: dict[str, str] = {}
     for platform, rules in _PLATFORM_RULES.items():
-        versions[platform] = rules.get("tos_version", "unknown")
-        log.info("[LEGAL] %s ToS version: %s", platform, versions[platform])
-    log.info("[LEGAL] ToS refresh complete — Phase 2 will add live Tavily fetch")
+        cached_version = rules.get("tos_version", "unknown")
+        tos_url        = rules.get("tos_url", "")
+
+        try:
+            # Search for the ToS page by URL domain + "terms of service"
+            domain  = tos_url.split("/")[2] if tos_url else platform
+            query   = f'site:{domain} terms of service privacy policy 2025'
+            results = await search_niche_intelligence(query, max_results=3)
+
+            content      = " ".join(r.get("snippet", "") for r in results)
+            content_hash = hashlib.sha256(content.encode()).hexdigest()[:8]
+
+            # Alert if the hash differs from what was baked into _PLATFORM_RULES
+            if content_hash not in cached_version:
+                log.warning(
+                    "[LEGAL] ToS may have changed for %s "
+                    "(new_hash=%s cached=%s). "
+                    "Manually review %s before next deployment.",
+                    platform, content_hash, cached_version, tos_url,
+                )
+            else:
+                log.info("[LEGAL] %s ToS hash unchanged (%s)", platform, content_hash)
+
+            versions[platform] = f"{cached_version[:7]}-{content_hash}"
+
+        except Exception as exc:
+            log.warning("[LEGAL] ToS check failed for %s: %s", platform, exc)
+            versions[platform] = cached_version
+
+    log.info("[LEGAL] ToS snapshot refresh complete: %s", versions)
     return versions

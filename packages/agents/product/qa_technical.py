@@ -8,9 +8,10 @@ Output:  qa_report — pass → LEGAL_NODE, fail → ENGINEERING_NODE (max 3 ret
 
 Checks (in order):
   1. build_path exists on disk
-  2. vite build exits 0  ← real subprocess, 3-minute timeout
-  3. bundle size < 50 MB (dist/ folder total)
-  4. no hardcoded secrets in LLM-generated files
+  2. vite build exits 0           ← real subprocess, 3-minute timeout
+  3. bundle size < 50 MB          ← dist/ folder total
+  4. no hardcoded secrets          ← scans LLM-generated file contents
+  5. playwright smoke test         ← Week 9: Chromium headless, React mounts
 """
 from __future__ import annotations
 
@@ -170,9 +171,16 @@ async def qa_technical_node(state: AgentState) -> AgentState:
 async def _validate_build(build: dict) -> tuple[list[str], list[str], dict]:
     """
     Run all checks. Returns (checks_run, failures, updates_to_merge_into_artifact).
-    The updates dict contains the real vite_build_exit_code and bundle_size_kb.
+    The updates dict contains the real vite_build_exit_code, bundle_size_kb, and
+    playwright_errors from the browser smoke test.
     """
-    checks = ["build_path_exists", "vite_build", "bundle_size", "no_hardcoded_secrets"]
+    checks = [
+        "build_path_exists",
+        "vite_build",
+        "bundle_size",
+        "no_hardcoded_secrets",
+        "playwright_smoke",
+    ]
     failures: list[str] = []
     updates: dict = {}
 
@@ -184,6 +192,7 @@ async def _validate_build(build: dict) -> tuple[list[str], list[str], dict]:
         log.error("[QA_TECHNICAL] build_path missing or not a dir: %s", build_path)
         updates["vite_build_exit_code"] = -1
         updates["bundle_size_kb"] = 0
+        updates["playwright_errors"] = []
         return checks, failures, updates
 
     # 2 — real vite build
@@ -214,6 +223,26 @@ async def _validate_build(build: dict) -> tuple[list[str], list[str], dict]:
             failures.append("no_hardcoded_secrets")
             log.warning("[QA_TECHNICAL] Potential secret in file: %s", f.get("path"))
             break
+
+    # 5 — Playwright headless smoke test (Week 9)
+    # Only runs when dist/ exists (i.e. vite build passed).
+    # Gracefully skipped when Playwright/Chromium not installed.
+    playwright_errors: list[str] = []
+    if exit_code == 0 and dist_dir.is_dir():
+        from packages.tools.playwright_runner import run_smoke_test, playwright_available
+        if playwright_available():
+            log.info("[QA_TECHNICAL] Running Playwright smoke test | dir=%s", dist_dir)
+            pw_passed, playwright_errors = await run_smoke_test(dist_dir)
+            if not pw_passed:
+                failures.append("playwright_smoke")
+                log.warning("[QA_TECHNICAL] Playwright smoke failed: %s", playwright_errors[:3])
+        else:
+            playwright_errors = ["playwright_skip"]
+            log.info("[QA_TECHNICAL] Playwright not installed — smoke test skipped")
+    else:
+        playwright_errors = ["playwright_skip — vite build did not produce dist/"]
+
+    updates["playwright_errors"] = playwright_errors
 
     return checks, failures, updates
 

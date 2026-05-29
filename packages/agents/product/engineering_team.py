@@ -60,6 +60,7 @@ _SCAFFOLD: dict[str, str] = {
         "dependencies": {
             "@supabase/supabase-js": "^2.45.0",
             "@tanstack/react-query": "^5.59.0",
+            "posthog-js": "^1.182.0",
             "react": "^19.0.0",
             "react-dom": "^19.0.0",
             "react-router-dom": "^6.28.0",
@@ -140,7 +141,21 @@ export default defineConfig({
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import posthog from 'posthog-js'
 import App from './App.tsx'
+
+// PostHog analytics — only initialises when VITE_POSTHOG_KEY is set.
+// Gives growth feedback (pageviews, signups, conversions) from day 1.
+const posthogKey = import.meta.env.VITE_POSTHOG_KEY as string | undefined
+if (posthogKey) {
+  posthog.init(posthogKey, {
+    api_host: (import.meta.env.VITE_POSTHOG_HOST as string | undefined)
+      ?? 'https://us.i.posthog.com',
+    capture_pageview: true,
+    capture_pageleave: true,
+    persistence: 'localStorage',
+  })
+}
 
 const queryClient = new QueryClient()
 
@@ -310,6 +325,7 @@ async def engineering_team_node(state: AgentState) -> AgentState:
 _SCAFFOLD_DEPS = [
     "react@19", "react-dom@19", "react-router-dom@6",
     "@tanstack/react-query@5", "@supabase/supabase-js@2",
+    "posthog-js@1",
     "serve@14",
     "vite@6", "@vitejs/plugin-react", "typescript@5",
 ]

@@ -13,6 +13,7 @@ Checks:
   ✓ Thumbnail resolution 1280x720
   ✓ No prohibited phrases in title
   ✓ Description length within limits
+  ✓ Copyright fingerprint (Week 9: file-size stub; Phase 3: ACRCloud API)
 """
 from __future__ import annotations
 
@@ -154,8 +155,13 @@ async def qa_compliance_node(state: AgentState) -> AgentState:
 
 
 def _validate_content(content: dict) -> tuple[list[str], list[str]]:
-    checks = ["human_likeness_score", "title_length", "video_duration",
-              "thumbnail_resolution", "prohibited_phrases"]
+    checks = [
+        "human_likeness_score",
+        "title_length",
+        "video_duration",
+        "prohibited_phrases",
+        "copyright_fingerprint",
+    ]
     failures: list[str] = []
 
     audio = content.get("audio_asset") or {}
@@ -179,7 +185,55 @@ def _validate_content(content: dict) -> tuple[list[str], list[str]]:
         if duration < 30 or duration > 3600:
             failures.append("video_duration")
 
+    # Copyright fingerprint — Week 9 stub
+    # Checks: audio file is non-empty and within sane size bounds.
+    # Phase 3 upgrade: replace with ACRCloud humming-search API call.
+    copyright_ok, copyright_reason = _copyright_fingerprint_check(audio)
+    if not copyright_ok:
+        failures.append("copyright_fingerprint")
+        log.warning("[QA_COMPLIANCE] Copyright check failed: %s", copyright_reason)
+
     return checks, failures
+
+
+def _copyright_fingerprint_check(audio_asset: dict) -> tuple[bool, str]:
+    """
+    Stub copyright check — verifies the audio asset is plausibly original.
+
+    Current logic (file-size heuristic):
+      - No file_path set          → assume clear (ElevenLabs stub mode)
+      - File doesn't exist on disk → assume clear (remote storage path)
+      - File < 1 KB               → flag as suspiciously small (may be silent)
+      - File > 500 MB             → flag as suspiciously large
+
+    Phase 3 upgrade path:
+      if ACRCOUD_API_KEY set → submit audio to ACRCloud humming-search endpoint
+      → compare against their 90M-track copyright database
+      → return match details as a WARNING flag for manual review.
+    """
+    from pathlib import Path
+
+    file_path = audio_asset.get("file_path", "")
+    if not file_path:
+        return True, ""
+
+    p = Path(file_path)
+    if not p.exists():
+        # Path is a cloud/Supabase URL — can't stat locally, assume clear
+        return True, ""
+
+    size = p.stat().st_size
+    if size < 1_000:
+        return False, (
+            f"Audio file is only {size} bytes — may be silent or corrupt. "
+            "Re-generate with ElevenLabs."
+        )
+    if size > 500 * 1024 * 1024:
+        return False, (
+            f"Audio file is {size // (1024*1024)} MB — unexpectedly large. "
+            "Verify the correct file was written."
+        )
+    return True, ""
 
 
 async def _generate_critique(failed_checks: list[str], content: dict) -> dict:

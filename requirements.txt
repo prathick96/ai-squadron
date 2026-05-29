@@ -33,3 +33,6 @@ uvicorn>=0.32.0
 
 # Revenue
 stripe>=11.0.0
+
+# QA — Week 9 Playwright smoke tests
+playwright>=1.47.0

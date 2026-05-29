@@ -10,12 +10,16 @@
 # create the venv ourselves, and reference pip by its full venv path.
 
 [phases.setup]
-nixPkgs = ["python311", "nodejs_20"]
+# chromium — system Chromium for Playwright smoke tests (Week 9).
+# Playwright detects it via PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH or shutil.which("chromium").
+nixPkgs = ["python311", "nodejs_20", "chromium"]
 
 [phases.install]
 cmds = [
   "python3.11 -m venv /opt/venv",
   "/opt/venv/bin/pip install -r requirements.txt",
+  # Install Playwright browser bindings (skips heavy browser download — uses system Chromium).
+  "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 /opt/venv/bin/python -m playwright install chromium",
   "npm --prefix frontend install"
 ]
 
