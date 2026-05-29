@@ -586,21 +586,25 @@ export default function App() {
           </div>
         )}
 
-        {recentRuns.length === 0 ? (
-          <p style={{ color: "var(--muted)", fontSize: "0.82rem", marginTop: 8 }}>
-            No pipeline runs yet. Click "Launch New Venture" to start.
-          </p>
-        ) : (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginBottom: 6 }}>
-              {recentRuns.length} run{recentRuns.length !== 1 ? "s" : ""} total —{" "}
-              {recentRuns.filter((r) => r.status === "RUNNING" || r.status === "STARTED").length} active
+        {(() => {
+          const killedIds = new Set(ventures.filter((v) => v.status === "KILLED").map((v) => v.venture_id));
+          const visibleRuns = recentRuns.filter((r) => !killedIds.has(r.venture_id));
+          return visibleRuns.length === 0 ? (
+            <p style={{ color: "var(--muted)", fontSize: "0.82rem", marginTop: 8 }}>
+              No pipeline runs yet. Click "Launch New Venture" to start.
+            </p>
+          ) : (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginBottom: 6 }}>
+                {visibleRuns.length} run{visibleRuns.length !== 1 ? "s" : ""} total —{" "}
+                {visibleRuns.filter((r) => r.status === "RUNNING" || r.status === "STARTED").length} active
+              </div>
+              {visibleRuns.map((run) => (
+                <ActiveRunCard key={run.run_id} run={run} onRefresh={refreshRecentRuns} />
+              ))}
             </div>
-            {recentRuns.map((run) => (
-              <ActiveRunCard key={run.run_id} run={run} onRefresh={refreshRecentRuns} />
-            ))}
-          </div>
-        )}
+          );
+        })()}
       </section>
 
       <div className="grid grid-top">
