@@ -80,12 +80,13 @@ MODEL_REGISTRY: dict[str, tuple[str, str]] = {
     # Legacy scout names (backward compat)
     "KIMI_SCOUT_OPPORTUNITY":  ("kimi", _KIMI_MODEL),
 
-    # ── Governance (Flash — Pro access requires paid key; swap back when key upgraded) ──
-    "GRAND_CEO":           ("gemini",    _FLASH),
-    "LEGAL_AGENT":         ("gemini",    _FLASH),
-    "REVENUE_ENGINE":      ("gemini",    _FLASH),
+    # ── Governance — moved to Claude: Google project-level 403 blocks all Gemini ──
+    # Swap back to ("gemini", "gemini-2.5-pro") once GCP access is restored.
+    "GRAND_CEO":           ("anthropic", "claude-sonnet-4-6"),
+    "LEGAL_AGENT":         ("anthropic", "claude-haiku-4-5-20251001"),
+    "REVENUE_ENGINE":      ("anthropic", "claude-haiku-4-5-20251001"),
     # Legacy
-    "CEO_NICHE_SCOUT":     ("gemini",    _FLASH),
+    "CEO_NICHE_SCOUT":     ("anthropic", "claude-sonnet-4-6"),
 
     # ── Engineering (Claude Sonnet — best code gen) ───────────────────────
     "ENGINEERING_TEAM":    ("anthropic", "claude-sonnet-4-6"),

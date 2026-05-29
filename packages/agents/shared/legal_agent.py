@@ -2,7 +2,7 @@
 packages/agents/shared/legal_agent.py
 Legal & Compliance Agent — veto authority over all deployments.
 
-Model:   gemini-2.0-flash (swap to 2.5-pro once key has Pro access)
+Model:   claude-haiku-4-5 (Google project-level 403 — swap to gemini-2.5-pro when resolved)
 Input:   Build artifact (product) or Content package (media) + platform context
 Output:  LegalClearance — cleared or denied with specific clause references
 
