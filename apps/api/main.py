@@ -148,7 +148,7 @@ async def _run_pipeline_background(state: dict, department: str) -> None:
     final_state: dict = dict(state)
 
     try:
-        begin_pipeline_run(run_id, venture_id)
+        begin_pipeline_run(run_id, venture_id, department)
         graph = build_squadron_graph(department)
 
         # Stream node-by-node: each chunk is {node_name: state_updates}
@@ -186,7 +186,15 @@ def _try_supabase_agents() -> list[dict] | None:
     try:
         from packages.db.pipeline import fetch_recent_agent_logs
         rows = fetch_recent_agent_logs(50)
-        return rows if rows else None
+        if not rows:
+            return None
+        # Rows are ordered newest-first; keep only the most recent entry per agent_name.
+        seen: dict[str, dict] = {}
+        for row in rows:
+            name = row.get("agent_name", "")
+            if name and name not in seen:
+                seen[name] = row
+        return list(seen.values()) if seen else None
     except Exception as exc:
         log.debug("Supabase agent_logs unavailable: %s", exc)
     return None
@@ -399,9 +407,37 @@ async def trigger_pipeline(body: PipelineRunBody, background_tasks: BackgroundTa
 
 @app.get("/api/pipeline/recent")
 def get_recent_pipelines() -> dict:
-    """List the 20 most recent pipeline runs (newest first)."""
-    runs = registry.list_recent(20)
-    return {"runs": [_run_to_dict(r) for r in runs], "count": len(runs)}
+    """List the 50 most recent pipeline runs (newest first), merging memory + Supabase history."""
+    # In-memory registry: live runs + recent from the current process
+    runs_by_id: dict[str, dict] = {
+        r.run_id: _run_to_dict(r) for r in registry.list_recent(50)
+    }
+
+    # Supabase: persistent history that survives server restarts
+    try:
+        from packages.db.pipeline import fetch_pipeline_runs
+        for row in fetch_pipeline_runs(50):
+            run_id = row.get("run_id", "")
+            if not run_id or run_id in runs_by_id:
+                continue  # live record takes priority
+            runs_by_id[run_id] = {
+                "run_id": run_id,
+                "venture_id": row.get("venture_id", ""),
+                "department": row.get("department", "PRODUCT"),
+                "status": row.get("status", "COMPLETED"),
+                "current_stage": row.get("pipeline_stage", "END"),
+                "started_at": row.get("started_at", ""),
+                "updated_at": row.get("completed_at") or row.get("started_at", ""),
+                "completed_at": row.get("completed_at"),
+                "event_count": 0,
+                "recent_events": [],
+                "last_error": row.get("error_message"),
+            }
+    except Exception as exc:
+        log.debug("[pipeline] Supabase history unavailable: %s", exc)
+
+    runs = sorted(runs_by_id.values(), key=lambda r: r.get("started_at", ""), reverse=True)[:50]
+    return {"runs": runs, "count": len(runs)}
 
 
 @app.get("/api/pipeline/{run_id}")

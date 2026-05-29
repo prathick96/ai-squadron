@@ -496,7 +496,11 @@ export default function App() {
           </p>
         ) : (
           <div style={{ marginTop: 10 }}>
-            {recentRuns.slice(0, 6).map((run) => (
+            <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginBottom: 6 }}>
+              {recentRuns.length} run{recentRuns.length !== 1 ? "s" : ""} total —{" "}
+              {recentRuns.filter((r) => r.status === "RUNNING" || r.status === "STARTED").length} active
+            </div>
+            {recentRuns.map((run) => (
               <ActiveRunCard key={run.run_id} run={run} onRefresh={refreshRecentRuns} />
             ))}
           </div>

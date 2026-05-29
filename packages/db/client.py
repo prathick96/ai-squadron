@@ -80,6 +80,12 @@ class _NullTable:
     def eq(self, col: str, val: Any) -> "_NullTable":
         return self
 
+    def order(self, col: str, **kwargs) -> "_NullTable":
+        return self
+
+    def limit(self, n: int) -> "_NullTable":
+        return self
+
     def execute(self) -> "_NullResult":
         return _NullResult()
 

@@ -13,7 +13,7 @@ from packages.db.client import get_db, is_supabase_connected, store_event
 log = logging.getLogger(__name__)
 
 
-def begin_pipeline_run(run_id: str, venture_id: str) -> None:
+def begin_pipeline_run(run_id: str, venture_id: str, department: str = "PRODUCT") -> None:
     if not is_supabase_connected():
         return
     db = get_db()
@@ -24,12 +24,13 @@ def begin_pipeline_run(run_id: str, venture_id: str) -> None:
         "status": "RUNNING",
         "qa_retry_count": 0,
         "started_at": datetime.now(timezone.utc).isoformat(),
+        "department": department,
     }
     try:
         db.table("pipeline_runs").upsert(row, on_conflict="run_id").execute()
     except TypeError:
         db.table("pipeline_runs").upsert(row).execute()
-    log.debug("[pipeline] RUNNING run_id=%s", run_id)
+    log.debug("[pipeline] RUNNING run_id=%s dept=%s", run_id, department)
 
 
 def update_pipeline_stage(run_id: str, venture_id: str, stage: str, qa_retry_count: int = 0) -> None:
@@ -133,4 +134,23 @@ def fetch_ventures_for_portfolio(limit: int = 450) -> list[dict[str, Any]]:
         result = db.table("ventures").select("*").order("updated_at", desc=True).limit(limit).execute()
         return result.data or []
     except Exception:
+        return []
+
+
+def fetch_pipeline_runs(limit: int = 50) -> list[dict[str, Any]]:
+    """Fetch recent pipeline runs from Supabase for persistent history display."""
+    if not is_supabase_connected():
+        return []
+    db = get_db()
+    try:
+        result = (
+            db.table("pipeline_runs")
+            .select("*")
+            .order("started_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+    except Exception as exc:
+        log.debug("[pipeline] fetch_pipeline_runs failed: %s", exc)
         return []
