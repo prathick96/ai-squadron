@@ -68,6 +68,17 @@ export type ManualReviewItem = {
   created_at?: string;
 };
 
+export type Venture = {
+  venture_id: string;
+  venture_type: string;
+  niche: string;
+  status: string;
+  go_decision?: boolean;
+  feasibility_score?: number | null;
+  updated_at?: string;
+  created_at?: string;
+};
+
 export type PipelineRunStatus =
   | "STARTED"
   | "RUNNING"
@@ -138,6 +149,19 @@ export const api = {
     ),
   addLedgerEntry: (body: LedgerEntryBody) =>
     post<{ ok: boolean; entry: LedgerEntry }>("/api/revenue/ledger", body),
+
+  // Venture management
+  ventures: () => get<{ ventures: Venture[]; count: number }>("/api/ventures"),
+  killVenture: (venture_id: string) =>
+    fetch(`${API_BASE}/api/ventures/${encodeURIComponent(venture_id)}`, { method: "DELETE" }).then(
+      async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error((data as { detail?: string }).detail ?? `${res.status}`);
+        }
+        return res.json() as Promise<{ ok: boolean; venture_id: string; status: string }>;
+      },
+    ),
 
   // Week 5 — pipeline control
   pipelineRun: (department: "PRODUCT" | "MEDIA" | "AUTO" = "AUTO", venture_id?: string) =>

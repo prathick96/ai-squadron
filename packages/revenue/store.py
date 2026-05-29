@@ -69,6 +69,27 @@ def list_ventures() -> list[dict[str, Any]]:
     return result.data or []
 
 
+def venture_has_revenue_local(venture_id: str) -> bool:
+    """Check local JSON store for any revenue > 0 for the given venture."""
+    ledger = _load_local().get("revenue_ledger", [])
+    return any(
+        e.get("venture_id") == venture_id and (e.get("amount_usd") or 0) > 0
+        for e in ledger
+    )
+
+
+def kill_venture_local(venture_id: str) -> bool:
+    """Set venture status to KILLED in local JSON store."""
+    data = _load_local()
+    for v in data.get("ventures", []):
+        if v.get("venture_id") == venture_id:
+            v["status"] = "KILLED"
+            _save_local(data)
+            log.info("[store] venture KILLED (local): %s", venture_id)
+            return True
+    return False
+
+
 def list_ledger() -> list[dict[str, Any]]:
     if is_local_mode():
         return _load_local().get("revenue_ledger", [])

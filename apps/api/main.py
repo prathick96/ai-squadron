@@ -76,7 +76,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -358,6 +358,35 @@ def add_ledger_entry(body: LedgerEntryBody) -> dict:
     }
     upsert_ledger_row(row)
     return {"ok": True, "entry": row}
+
+
+@app.get("/api/ventures")
+def list_all_ventures() -> dict:
+    """List all ventures (non-killed) for the management panel."""
+    from packages.revenue.store import list_ventures
+    ventures = list_ventures()
+    return {"ventures": ventures, "count": len(ventures)}
+
+
+@app.delete("/api/ventures/{venture_id}")
+def kill_venture_endpoint(venture_id: str) -> dict:
+    """
+    Soft-delete a venture by setting its status to KILLED.
+    Blocked (409) if the venture has any revenue in the ledger.
+    """
+    from packages.revenue.store import is_local_mode, venture_has_revenue_local, kill_venture_local
+    from packages.db.pipeline import venture_has_revenue, kill_venture
+
+    if is_local_mode():
+        if venture_has_revenue_local(venture_id):
+            raise HTTPException(409, "Venture is generating revenue — cannot kill")
+        kill_venture_local(venture_id)
+    else:
+        if venture_has_revenue(venture_id):
+            raise HTTPException(409, "Venture is generating revenue — cannot kill")
+        if not kill_venture(venture_id):
+            raise HTTPException(500, "Kill failed — DB write error")
+    return {"ok": True, "venture_id": venture_id, "status": "KILLED"}
 
 
 @app.get("/api/portfolio")

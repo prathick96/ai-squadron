@@ -154,3 +154,35 @@ def fetch_pipeline_runs(limit: int = 50) -> list[dict[str, Any]]:
     except Exception as exc:
         log.debug("[pipeline] fetch_pipeline_runs failed: %s", exc)
         return []
+
+
+def venture_has_revenue(venture_id: str) -> bool:
+    """Return True if the venture has any ledger entries with amount_usd > 0."""
+    if not is_supabase_connected():
+        return False
+    db = get_db()
+    try:
+        result = (
+            db.table("revenue_ledger")
+            .select("amount_usd")
+            .eq("venture_id", venture_id)
+            .execute()
+        )
+        return any((row.get("amount_usd") or 0) > 0 for row in (result.data or []))
+    except Exception as exc:
+        log.debug("[pipeline] venture_has_revenue check failed: %s", exc)
+        return False
+
+
+def kill_venture(venture_id: str) -> bool:
+    """Soft-delete a venture by setting its status to KILLED. Returns True on success."""
+    if not is_supabase_connected():
+        return False
+    db = get_db()
+    try:
+        db.table("ventures").update({"status": "KILLED"}).eq("venture_id", venture_id).execute()
+        log.info("[pipeline] venture KILLED: %s", venture_id)
+        return True
+    except Exception as exc:
+        log.warning("[pipeline] kill_venture failed: %s", exc)
+        return False

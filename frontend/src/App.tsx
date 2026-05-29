@@ -3,12 +3,11 @@ import {
   api,
   type AgentRow,
   type ConfidenceReport,
-  type LedgerEntry,
-  type LedgerEntryBody,
   type ManualReviewItem,
   type PipelineRun,
   type PortfolioSlot,
   type RevenueSummary,
+  type Venture,
 } from "./api";
 
 function formatUsd(n: number) {
@@ -90,6 +89,103 @@ function PipelineProgressBar({ run }: { run: PipelineRun }) {
             transition: "width 0.4s ease",
           }}
         />
+      </div>
+    </div>
+  );
+}
+
+function ConfirmKillDialog({
+  venture,
+  onConfirm,
+  onCancel,
+  loading,
+  error,
+}: {
+  venture: Venture;
+  onConfirm: () => void;
+  onCancel: () => void;
+  loading: boolean;
+  error: string | null;
+}) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.75)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+      }}
+    >
+      <div
+        style={{
+          background: "#111",
+          border: "1px solid #f44",
+          borderRadius: 8,
+          padding: "24px 28px",
+          maxWidth: 420,
+          width: "90%",
+        }}
+      >
+        <h3 style={{ color: "#f44", marginTop: 0, fontFamily: "monospace" }}>Kill Venture?</h3>
+        <p style={{ fontSize: "0.85rem", marginBottom: 6 }}>
+          <strong className="mono">{venture.venture_id}</strong>
+        </p>
+        <p style={{ fontSize: "0.82rem", color: "var(--muted)", marginBottom: 16 }}>
+          Niche: {venture.niche || "—"} · Status: {venture.status}
+        </p>
+        <p style={{ fontSize: "0.82rem", marginBottom: 20 }}>
+          This will permanently mark the venture as <strong>KILLED</strong> and remove it from active
+          operations. This cannot be undone.
+        </p>
+        {error && (
+          <div
+            style={{
+              color: "#f66",
+              fontSize: "0.8rem",
+              marginBottom: 12,
+              fontFamily: "monospace",
+            }}
+          >
+            ⚠ {error}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button
+            onClick={onCancel}
+            disabled={loading}
+            style={{
+              background: "#222",
+              color: "var(--fg)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              padding: "6px 16px",
+              cursor: "pointer",
+              fontSize: "0.82rem",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={loading}
+            style={{
+              background: loading ? "#333" : "#f44",
+              color: loading ? "var(--muted)" : "#fff",
+              border: "none",
+              borderRadius: 4,
+              padding: "6px 16px",
+              fontWeight: 700,
+              cursor: loading ? "not-allowed" : "pointer",
+              fontSize: "0.82rem",
+              fontFamily: "monospace",
+            }}
+          >
+            {loading ? "Killing…" : "Yes, Kill It"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -190,52 +286,35 @@ export default function App() {
   const [dataSource, setDataSource] = useState("mock");
   const [lastTick, setLastTick] = useState<string>("");
 
-  // Week 8 — revenue ledger state
-  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
-  const [ledgerForm, setLedgerForm] = useState<LedgerEntryBody>({
-    venture_id: "",
-    period_start: new Date().toISOString().slice(0, 7) + "-01",
-    period_end: new Date().toISOString().slice(0, 10),
-    revenue_source: "MANUAL",
-    amount_usd: 0,
-    burn_usd: 0,
-    notes: "",
-  });
-  const [ledgerSubmitting, setLedgerSubmitting] = useState(false);
-  const [ledgerError, setLedgerError] = useState<string | null>(null);
-  const [ledgerSuccess, setLedgerSuccess] = useState(false);
+  // Venture management state
+  const [ventures, setVentures] = useState<Venture[]>([]);
+  const [killTarget, setKillTarget] = useState<Venture | null>(null);
+  const [killing, setKilling] = useState(false);
+  const [killError, setKillError] = useState<string | null>(null);
 
-  const refreshLedger = useCallback(async () => {
+  const refreshVentures = useCallback(async () => {
     try {
-      const res = await api.ledger();
-      setLedgerEntries(res.entries);
+      const res = await api.ventures();
+      setVentures(res.ventures);
     } catch {
       /* silent */
     }
   }, []);
 
-  const submitLedgerEntry = useCallback(async () => {
-    if (!ledgerForm.venture_id.trim()) {
-      setLedgerError("venture_id is required");
-      return;
-    }
-    if (ledgerForm.amount_usd < 0) {
-      setLedgerError("amount_usd must be ≥ 0");
-      return;
-    }
-    setLedgerSubmitting(true);
-    setLedgerError(null);
-    setLedgerSuccess(false);
+  const confirmKill = useCallback(async () => {
+    if (!killTarget) return;
+    setKilling(true);
+    setKillError(null);
     try {
-      await api.addLedgerEntry(ledgerForm);
-      setLedgerSuccess(true);
-      await refreshLedger();
+      await api.killVenture(killTarget.venture_id);
+      setKillTarget(null);
+      await refreshVentures();
     } catch (e) {
-      setLedgerError(e instanceof Error ? e.message : "Submit failed");
+      setKillError(e instanceof Error ? e.message : "Kill failed");
     } finally {
-      setLedgerSubmitting(false);
+      setKilling(false);
     }
-  }, [ledgerForm, refreshLedger]);
+  }, [killTarget, refreshVentures]);
 
   // Week 5 — pipeline control state
   const [pipelineDept, setPipelineDept] = useState<"PRODUCT" | "MEDIA" | "AUTO">("AUTO");
@@ -351,10 +430,10 @@ export default function App() {
   useEffect(() => {
     refresh();
     refreshRecentRuns();
-    refreshLedger();
+    refreshVentures();
     const id = setInterval(refresh, 8000);
     return () => clearInterval(id);
-  }, [refresh, refreshRecentRuns, refreshLedger]);
+  }, [refresh, refreshRecentRuns, refreshVentures]);
 
   useEffect(() => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -386,8 +465,23 @@ export default function App() {
   const burn = revenue?.burn_usd ?? 0;
   const net = revenue?.net_mrr_usd ?? 0;
 
+  const activeVentures = ventures.filter((v) => v.status !== "KILLED");
+  const statusOrder: Record<string, number> = { FAILED: 0, DEVELOPMENT: 1, QA: 2, IDEATION: 3, LIVE: 4, SCALING: 5 };
+  const sortedVentures = [...activeVentures].sort(
+    (a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9),
+  );
+
   return (
     <div className="app">
+      {killTarget && (
+        <ConfirmKillDialog
+          venture={killTarget}
+          onConfirm={confirmKill}
+          onCancel={() => { setKillTarget(null); setKillError(null); }}
+          loading={killing}
+          error={killError}
+        />
+      )}
       <header>
         <div>
           <h1>AI Squadron Command Center</h1>
@@ -615,165 +709,100 @@ export default function App() {
         </div>
       </section>
 
-      {/* Week 8 — Manual Revenue Entry + Ledger */}
+      {/* Venture Management — Kill Switch */}
       <section className="panel" style={{ marginTop: "1rem" }}>
-        <h2>Revenue Ledger</h2>
-
-        {/* Entry form */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-            gap: 8,
-            marginBottom: 12,
-          }}
-        >
-          {(
-            [
-              ["venture_id", "Venture ID", "text"],
-              ["period_start", "Period Start", "date"],
-              ["period_end", "Period End", "date"],
-              ["amount_usd", "Amount (USD)", "number"],
-              ["burn_usd", "Burn (USD)", "number"],
-            ] as [keyof LedgerEntryBody, string, string][]
-          ).map(([field, label, type]) => (
-            <label key={field} style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.78rem" }}>
-              <span style={{ color: "var(--muted)" }}>{label}</span>
-              <input
-                type={type}
-                value={String(ledgerForm[field])}
-                onChange={(e) =>
-                  setLedgerForm((prev) => ({
-                    ...prev,
-                    [field]: type === "number" ? parseFloat(e.target.value) || 0 : e.target.value,
-                  }))
-                }
-                style={{
-                  background: "#111",
-                  border: "1px solid var(--border)",
-                  borderRadius: 4,
-                  color: "var(--fg)",
-                  padding: "4px 6px",
-                  fontSize: "0.8rem",
-                  fontFamily: "monospace",
-                }}
-              />
-            </label>
-          ))}
-          <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.78rem" }}>
-            <span style={{ color: "var(--muted)" }}>Source</span>
-            <select
-              value={ledgerForm.revenue_source}
-              onChange={(e) =>
-                setLedgerForm((prev) => ({
-                  ...prev,
-                  revenue_source: e.target.value as LedgerEntryBody["revenue_source"],
-                }))
-              }
-              style={{
-                background: "#111",
-                border: "1px solid var(--border)",
-                borderRadius: 4,
-                color: "var(--fg)",
-                padding: "4px 6px",
-                fontSize: "0.8rem",
-              }}
-            >
-              <option value="MANUAL">MANUAL</option>
-              <option value="STRIPE">STRIPE</option>
-              <option value="ADSENSE">ADSENSE</option>
-            </select>
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: "0.78rem", gridColumn: "span 2" }}>
-            <span style={{ color: "var(--muted)" }}>Notes</span>
-            <input
-              type="text"
-              value={ledgerForm.notes}
-              onChange={(e) => setLedgerForm((prev) => ({ ...prev, notes: e.target.value }))}
-              placeholder="Optional notes"
-              style={{
-                background: "#111",
-                border: "1px solid var(--border)",
-                borderRadius: 4,
-                color: "var(--fg)",
-                padding: "4px 6px",
-                fontSize: "0.8rem",
-                fontFamily: "monospace",
-              }}
-            />
-          </label>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2>Venture Management</h2>
+          <span style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
+            {activeVentures.length} active · click Kill to shut down failed ventures
+          </span>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-          <button
-            onClick={submitLedgerEntry}
-            disabled={ledgerSubmitting}
-            style={{
-              background: ledgerSubmitting ? "#333" : "var(--accent)",
-              color: ledgerSubmitting ? "var(--muted)" : "#000",
-              border: "none",
-              borderRadius: 4,
-              padding: "6px 16px",
-              fontSize: "0.82rem",
-              fontWeight: 700,
-              cursor: ledgerSubmitting ? "not-allowed" : "pointer",
-              fontFamily: "monospace",
-            }}
-          >
-            {ledgerSubmitting ? "Saving…" : "Add Entry"}
-          </button>
-          {ledgerSuccess && (
-            <span style={{ color: "var(--accent)", fontSize: "0.78rem" }}>Saved</span>
-          )}
-          {ledgerError && (
-            <span style={{ color: "#f66", fontSize: "0.78rem" }}>⚠ {ledgerError}</span>
-          )}
-        </div>
-
-        {/* Ledger table */}
-        {ledgerEntries.length === 0 ? (
-          <p style={{ color: "var(--muted)", fontSize: "0.82rem" }}>
-            No ledger entries yet. Add a Stripe, AdSense, or manual revenue record above.
+        {sortedVentures.length === 0 ? (
+          <p style={{ color: "var(--muted)", fontSize: "0.82rem", marginTop: 8 }}>
+            No active ventures found.
           </p>
         ) : (
-          <table className="agent-table">
+          <table className="agent-table" style={{ marginTop: 10 }}>
             <thead>
               <tr>
-                <th>Venture</th>
-                <th>Period</th>
-                <th>Source</th>
-                <th>Amount</th>
-                <th>Burn</th>
-                <th>Notes</th>
+                <th>Venture ID</th>
+                <th>Niche</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {ledgerEntries.slice(-50).reverse().map((e, i) => (
-                <tr key={i}>
-                  <td className="mono">{e.venture_id}</td>
-                  <td className="mono" style={{ fontSize: "0.72rem" }}>
-                    {e.period_start} → {e.period_end}
-                  </td>
-                  <td>
-                    <span className={`badge ${e.revenue_source === "STRIPE" ? "RUNNING" : e.revenue_source === "ADSENSE" ? "COMPLETED" : "STARTED"}`}>
-                      {e.revenue_source}
-                    </span>
-                  </td>
-                  <td className="mono" style={{ color: "var(--accent)" }}>
-                    {formatUsd(e.amount_usd)}
-                  </td>
-                  <td className="mono" style={{ color: "#f88" }}>
-                    {formatUsd(e.burn_usd)}
-                  </td>
-                  <td style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
-                    {e.notes || "—"}
-                  </td>
-                </tr>
-              ))}
+              {sortedVentures.map((v) => {
+                const isRevenue = v.status === "LIVE" || v.status === "SCALING";
+                return (
+                  <tr key={v.venture_id}>
+                    <td className="mono" style={{ fontSize: "0.75rem" }}>{v.venture_id}</td>
+                    <td style={{ fontSize: "0.78rem" }}>{v.niche || "—"}</td>
+                    <td className="mono" style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
+                      {v.venture_type?.replace(/_/g, " ") ?? "—"}
+                    </td>
+                    <td>
+                      <span
+                        style={{
+                          background:
+                            v.status === "LIVE" || v.status === "SCALING" ? "#1a4a1a" :
+                            v.status === "DEVELOPMENT" || v.status === "QA" ? "#1a2a3a" :
+                            "#2a1a1a",
+                          color:
+                            v.status === "LIVE" || v.status === "SCALING" ? "#4c4" :
+                            v.status === "DEVELOPMENT" || v.status === "QA" ? "#4af" :
+                            "#f66",
+                          borderRadius: 4,
+                          padding: "1px 6px",
+                          fontSize: "0.7rem",
+                          fontWeight: 700,
+                          fontFamily: "monospace",
+                        }}
+                      >
+                        {v.status}
+                      </span>
+                    </td>
+                    <td>
+                      {isRevenue ? (
+                        <span
+                          title="Generating revenue — cannot kill"
+                          style={{
+                            fontSize: "0.72rem",
+                            color: "#4c4",
+                            fontFamily: "monospace",
+                          }}
+                        >
+                          Protected
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => { setKillTarget(v); setKillError(null); }}
+                          style={{
+                            background: "#2a0a0a",
+                            color: "#f66",
+                            border: "1px solid #f44",
+                            borderRadius: 4,
+                            padding: "2px 10px",
+                            fontSize: "0.72rem",
+                            fontWeight: 700,
+                            cursor: "pointer",
+                            fontFamily: "monospace",
+                          }}
+                        >
+                          Kill
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
       </section>
+
     </div>
   );
 }
