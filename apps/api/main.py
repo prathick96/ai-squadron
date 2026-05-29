@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Squadron Command Center API",
-    version="0.4.0",
+    version="0.5.0",
     description="Agent health, revenue truth, confidence forecasts, manual review queue, pipeline control.",
     lifespan=lifespan,
 )
@@ -254,7 +254,7 @@ def health() -> dict:
     return {
         "status": "ok",
         "service": "command-center-api",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "storage": storage,
         "active_pipeline_runs": active,
     }
