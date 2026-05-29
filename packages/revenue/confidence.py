@@ -70,13 +70,36 @@ def build_confidence_report(
 
     pending_reviews = store.list_manual_reviews(status="PENDING")
 
+    # Completed pipeline runs (operational activity signal, available pre-revenue)
+    completed_runs = 0
+    try:
+        from packages.db.pipeline import fetch_pipeline_runs
+        db_runs = fetch_pipeline_runs(50)
+        completed_runs = sum(
+            1 for r in db_runs
+            if r.get("status") in ("COMPLETED", "MANUAL_REVIEW")
+        )
+    except Exception:
+        pass
+
     score = 0
-    score += min(25, int(avg_qa * 0.25))                    # QA up to 25
-    score += min(25, ventures_with_revenue * 12)            # revenue ventures up to 25
-    score += 15 if mrr_total >= 500 else (8 if mrr_total > 0 else 0)
-    score += 15 if burn_earn < 0.4 and mrr_total > 0 else (5 if mrr_total == 0 else 0)
-    score += 10 if scale_count > 0 else 0
-    score -= min(20, len(pending_reviews) * 5)
+    # --- Operational maturity (pre-revenue signals) ---
+    score += min(15, live_count * 7)              # DEVELOPMENT/QA/LIVE ventures → up to 15
+    score += min(10, completed_runs * 2)          # completed pipeline runs → up to 10
+
+    # --- Quality ---
+    score += min(20, int(avg_qa * 0.20))          # QA first-pass rate → up to 20
+
+    # --- Revenue traction ---
+    score += min(20, ventures_with_revenue * 10)  # revenue-generating ventures → up to 20
+    score += 10 if mrr_total >= 500 else (5 if mrr_total > 0 else 0)
+
+    # --- Portfolio health ---
+    score += 10 if burn_earn < 0.4 and mrr_total > 0 else (5 if mrr_total == 0 else 0)
+    score += 5 if scale_count > 0 else 0
+
+    # --- Penalties ---
+    score -= min(15, len(pending_reviews) * 5)
     score -= kill_count * 3
     score = max(0, min(100, score))
 
@@ -86,6 +109,7 @@ def build_confidence_report(
         "qa_first_pass_rate_pct": avg_qa,
         "ventures_with_revenue": ventures_with_revenue,
         "live_venture_count": live_count,
+        "completed_pipeline_runs": completed_runs,
         "burn_earn_ratio": burn_earn,
         "mrr_total_usd": round(mrr_total, 2),
         "burn_total_usd": round(burn_total, 2),

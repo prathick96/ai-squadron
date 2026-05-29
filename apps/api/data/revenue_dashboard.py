@@ -33,9 +33,16 @@ def live_revenue_summary() -> dict | None:
 
 
 def live_confidence() -> dict:
+    from datetime import date
+
     report = store.latest_confidence_report()
     if report:
-        return report
+        # Only use the cached report if it was computed this week; otherwise recalculate.
+        current_week = date.today().isocalendar()
+        current_week_start = date.fromisocalendar(current_week[0], current_week[1], 1).isoformat()
+        if report.get("report_week") == current_week_start:
+            return report
+
     scorecards = store.list_scorecards() or build_venture_scorecards()
     portfolio = store.portfolio_snapshot()
     return build_confidence_report(scorecards, portfolio)

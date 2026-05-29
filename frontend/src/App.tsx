@@ -437,7 +437,9 @@ export default function App() {
           </div>
           <div className="conf-indicators">
             QA {confidence.leading_indicators?.qa_first_pass_rate_pct ?? 0}% · Revenue ventures{" "}
-            {confidence.leading_indicators?.ventures_with_revenue ?? 0} · Reviews pending{" "}
+            {confidence.leading_indicators?.ventures_with_revenue ?? 0} · Active dev{" "}
+            {confidence.leading_indicators?.live_venture_count ?? 0} · Runs{" "}
+            {confidence.leading_indicators?.completed_pipeline_runs ?? 0} · Reviews pending{" "}
             {confidence.leading_indicators?.manual_review_pending ?? 0}
           </div>
         </section>
