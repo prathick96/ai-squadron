@@ -4,9 +4,15 @@ LLM client factory with proper rate-limit handling.
 
 Retry strategy:
   - Transient errors (5xx, network)  : retry up to 3x, exponential backoff (4s→60s)
-  - 429 / quota exhausted on Pro      : immediate fallback to Flash (no retry)
-  - 429 on Flash                      : wait 61 seconds, retry Flash once
+  - 429 / quota exhausted            : immediate fallback to Flash (no retry)
+  - 403 / permission denied          : treated as rate-limit → fallback to Flash
+  - 429 / 403 on Flash               : wait 61 seconds, retry Flash once
+  - Empty response (safety filter)   : raise ValueError so fallback fires
   - All other errors                  : raise immediately
+
+Model tier:
+  Governance agents (CEO, Legal) use Flash by default.
+  Swap to gemini-2.5-pro once the API key has Pro access enabled.
 """
 from __future__ import annotations
 
@@ -74,12 +80,12 @@ MODEL_REGISTRY: dict[str, tuple[str, str]] = {
     # Legacy scout names (backward compat)
     "KIMI_SCOUT_OPPORTUNITY":  ("kimi", _KIMI_MODEL),
 
-    # ── Governance (Gemini Pro — strategic reasoning) ─────────────────────
-    "GRAND_CEO":           ("gemini",    "gemini-2.5-pro"),
-    "LEGAL_AGENT":         ("gemini",    "gemini-2.5-pro"),
-    "REVENUE_ENGINE":      ("gemini",    "gemini-2.5-pro"),
+    # ── Governance (Flash — Pro access requires paid key; swap back when key upgraded) ──
+    "GRAND_CEO":           ("gemini",    _FLASH),
+    "LEGAL_AGENT":         ("gemini",    _FLASH),
+    "REVENUE_ENGINE":      ("gemini",    _FLASH),
     # Legacy
-    "CEO_NICHE_SCOUT":     ("gemini",    "gemini-2.5-pro"),
+    "CEO_NICHE_SCOUT":     ("gemini",    _FLASH),
 
     # ── Engineering (Claude Sonnet — best code gen) ───────────────────────
     "ENGINEERING_TEAM":    ("anthropic", "claude-sonnet-4-6"),
@@ -150,6 +156,9 @@ def _is_rate_limit(exc: Exception) -> bool:
         return any(k in s for k in (
             "429", "quota", "rate_limit", "resource_exhausted",
             "too many requests", "rate exceeded",
+            # 403 PERMISSION_DENIED — treated as "no access to this model tier",
+            # so we fall back to Flash exactly like a rate limit.
+            "403", "permission_denied", "denied access",
         ))
 
     if _check(exc):

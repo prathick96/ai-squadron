@@ -2,7 +2,7 @@
 packages/agents/governance/grand_ceo.py
 Grand CEO Agent — Portfolio governor and go/no-go decision maker.
 
-Model:   gemini-2.5-pro
+Model:   gemini-2.0-flash (swap to 2.5-pro once key has Pro access)
 Input:   ResearchDossier from Research Council + portfolio Growth Reports
 Output:  VentureBrief (niche approved) + department routing (PRODUCT or MEDIA)
 
