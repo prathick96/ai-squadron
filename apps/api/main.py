@@ -202,9 +202,10 @@ def _try_supabase_agents() -> list[dict] | None:
 
 def _portfolio_from_supabase() -> dict | None:
     from packages.db.pipeline import fetch_ventures_for_portfolio
-    ventures = fetch_ventures_for_portfolio(450)
-    if not ventures:
+    all_ventures = fetch_ventures_for_portfolio(450)
+    if not all_ventures:
         return None
+    ventures = [v for v in all_ventures if v.get("status") != "KILLED"]
     slots = []
     for i, v in enumerate(ventures):
         slots.append({
