@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -97,6 +98,9 @@ def upsert_venture(venture_data: dict[str, Any]) -> None:
     db.table("ventures").upsert(venture_data).execute()
 
 
+_TERMINAL_STATUSES = {"SUCCESS", "FAILED", "COMPLETED", "SKIPPED"}
+
+
 def log_agent_event(
     run_id: str,
     venture_id: str,
@@ -109,7 +113,7 @@ def log_agent_event(
     error_detail: str | None = None,
 ) -> None:
     db = get_db()
-    db.table("agent_logs").insert({
+    row: dict[str, Any] = {
         "run_id":       run_id,
         "venture_id":   venture_id,
         "agent_name":   agent_name,
@@ -119,7 +123,10 @@ def log_agent_event(
         "latency_ms":   latency_ms,
         "retry_count":  retry_count,
         "error_detail": error_detail,
-    }).execute()
+    }
+    if status in _TERMINAL_STATUSES:
+        row["completed_at"] = datetime.now(timezone.utc).isoformat()
+    db.table("agent_logs").insert(row).execute()
 
 
 def store_event(

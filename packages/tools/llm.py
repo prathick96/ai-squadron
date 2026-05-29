@@ -213,6 +213,19 @@ async def _gemini_raw(
     input_tokens  = getattr(usage, "prompt_token_count",     0) if usage else 0
     output_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
 
+    if not text:
+        # Empty text means quota exhaustion (billing not active), a safety filter
+        # block, or a model error.  Raise so _call_gemini's fallback chain fires.
+        try:
+            candidates = getattr(response, "candidates", None) or []
+            finish_reason = str(getattr(candidates[0], "finish_reason", "UNKNOWN")) if candidates else "UNKNOWN"
+        except Exception:
+            finish_reason = "UNKNOWN"
+        raise ValueError(
+            f"Gemini {model_name} returned empty response "
+            f"(finish_reason={finish_reason}). Check billing/quota and safety filters."
+        )
+
     log.debug("Gemini %s → %d tokens %dms", model_name, input_tokens + output_tokens, latency_ms)
     return LLMResponse(text, input_tokens, output_tokens, latency_ms, model_used=model_name)
 
