@@ -229,7 +229,7 @@ class ResearchDossierPayload(BaseModel):
     consensus_niches: list[str] = []
     disagreements: list[dict[str, Any]] = []
     council_confidence: float = Field(ge=0.0, le=1.0)
-    research_mode: Literal["kimi_openrouter", "mock"] = "mock"
+    research_mode: Literal["kimi_live", "kimi_openrouter", "mock"] = "mock"
 
 
 class VentureBriefPayload(BaseModel):

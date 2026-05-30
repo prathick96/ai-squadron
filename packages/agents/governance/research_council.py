@@ -162,7 +162,7 @@ async def research_council_node(state: AgentState) -> AgentState:
         consensus_niches=dossier_body["consensus_niches"],
         disagreements=dossier_body["disagreements"],
         council_confidence=dossier_body["council_confidence"],
-        research_mode=mode,  # type: ignore[arg-type]
+        research_mode=mode,
     )
 
     event = make_event(
