@@ -28,7 +28,7 @@ from typing import Any
 
 from packages.db.client import get_db, log_agent_event
 from packages.schemas.events import (
-    AgentID, EventType, LegalClearancePayload, PolicyFlag, make_event,
+    AgentID, EventType, LegalClearancePayload, make_event,
 )
 from packages.state.agent_state import AgentState, LegalClearance, append_event, update_stage
 from packages.tools.llm import call_llm, extract_json
@@ -226,7 +226,7 @@ async def legal_agent_node(state: AgentState) -> AgentState:
         is_cleared=is_cleared,
         platforms_reviewed=platforms,
         tos_version=tos_version,
-        policy_flags=[PolicyFlag(**f) for f in all_flags],
+        policy_flags=all_flags,   # list[dict] — schema relaxed from list[PolicyFlag]
         copyright_clear=copyright_clear,
         gdpr_reviewed=gdpr_reviewed,
         clearance_expires_at=expires_at,
