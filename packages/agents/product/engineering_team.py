@@ -6,16 +6,20 @@ Model:   claude-sonnet-4-6
 Input:   tech_spec (initial) | qa_report.critique_log (retry patch)
 Output:  build_artifact with real build_path, files written to builds/{venture_id}/
 
-Disk layout:
-  builds/{venture_id}/
-    package.json          ← scaffold (deterministic, always written on first run)
-    vite.config.ts        ← scaffold
-    tsconfig.json         ← scaffold
-    tsconfig.node.json    ← scaffold
-    index.html            ← scaffold
-    src/vite-env.d.ts     ← scaffold
-    src/main.tsx          ← scaffold
-    src/App.tsx           ← LLM-generated (and everything under src/ beyond main.tsx)
+Architecture (lessons learned from 30+ runs):
+  SCAFFOLD owns all infrastructure — written deterministically, never by LLM:
+    package.json, vite.config.ts, tsconfig.json, index.html, src/main.tsx
+    src/App.tsx              ← routing + Supabase check (was biggest LLM failure)
+    src/lib/supabase.ts      ← graceful degradation when env vars missing
+    src/components/SetupRequired.tsx  ← shown when VITE_SUPABASE_* not set
+
+  LLM generates ONLY feature-specific files (3 files max):
+    src/pages/Home.tsx       ← main feature page
+    src/types.ts             ← domain types
+    src/hooks/useData.ts     ← TanStack Query hook
+
+  This split guarantees React always mounts and the app always renders
+  something meaningful — the only pending step for the user is Supabase keys.
 
 On retry: only patched files are overwritten; node_modules/ is reused.
 """
@@ -48,62 +52,77 @@ _BUILDS_ROOT = Path(os.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
 # ---------------------------------------------------------------------------
 
 _SCAFFOLD: dict[str, str] = {
+    # ------------------------------------------------------------------
+    # package.json — pinned deps, no LLM can change these
+    # ------------------------------------------------------------------
     "package.json": json.dumps({
-        "name": "ai-squadron-app",
+        "name": "ai-squadron-saas",
         "version": "0.1.0",
         "private": True,
         "type": "module",
         "scripts": {
-            "dev": "vite",
-            "build": "vite build",
-            "preview": "vite preview",
+            "dev":       "vite",
+            "build":     "vite build",
+            "preview":   "vite preview",
             "typecheck": "tsc --noEmit",
-            "start": "serve -s dist --listen $PORT",
+            "start":     "serve -s dist --listen $PORT",
         },
         "dependencies": {
             "@supabase/supabase-js": "^2.45.0",
             "@tanstack/react-query": "^5.59.0",
-            "posthog-js": "^1.182.0",
-            "react": "^19.0.0",
-            "react-dom": "^19.0.0",
-            "react-router-dom": "^6.28.0",
-            "serve": "^14.2.0",
+            "posthog-js":            "^1.182.0",
+            "react":                 "^19.0.0",
+            "react-dom":             "^19.0.0",
+            "react-router-dom":      "^6.28.0",
+            "serve":                 "^14.2.0",
         },
         "devDependencies": {
-            "@types/react": "^19.0.0",
-            "@types/react-dom": "^19.0.0",
-            "@vitejs/plugin-react": "^4.3.3",
-            "typescript": "^5.6.0",
-            "vite": "^6.0.0",
+            "@types/react":          "^19.0.0",
+            "@types/react-dom":      "^19.0.0",
+            "@vitejs/plugin-react":  "^4.3.3",
+            "typescript":            "^5.6.0",
+            "vite":                  "^6.0.0",
         },
     }, indent=2),
 
+    # ------------------------------------------------------------------
+    # vite.config.ts — deterministic, never changes
+    # ------------------------------------------------------------------
     "vite.config.ts": """\
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  build: { outDir: 'dist', sourcemap: false },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+    rollupOptions: { output: { manualChunks: undefined } },
+  },
 })
 """,
 
+    # ------------------------------------------------------------------
+    # tsconfig.json — lenient settings prevent LLM-generated code from
+    # failing on unused vars, implicit any, etc.
+    # ------------------------------------------------------------------
     "tsconfig.json": json.dumps({
         "compilerOptions": {
-            "target": "ES2020",
-            "useDefineForClassFields": True,
-            "lib": ["ES2020", "DOM", "DOM.Iterable"],
-            "module": "ESNext",
-            "skipLibCheck": True,
-            "moduleResolution": "bundler",
+            "target":                     "ES2020",
+            "useDefineForClassFields":    True,
+            "lib":                        ["ES2020", "DOM", "DOM.Iterable"],
+            "module":                     "ESNext",
+            "skipLibCheck":               True,   # ignore type errors in node_modules
+            "moduleResolution":           "bundler",
             "allowImportingTsExtensions": True,
-            "isolatedModules": True,
-            "moduleDetection": "force",
-            "noEmit": True,
-            "jsx": "react-jsx",
-            "strict": True,
-            "noUnusedLocals": False,
-            "noUnusedParameters": False,
+            "isolatedModules":            True,
+            "moduleDetection":            "force",
+            "noEmit":                     True,
+            "jsx":                        "react-jsx",
+            "strict":                     False,  # off: LLM code has implicit any
+            "noUnusedLocals":             False,
+            "noUnusedParameters":         False,
+            "noImplicitAny":              False,
             "noFallthroughCasesInSwitch": True,
         },
         "include": ["src"],
@@ -111,18 +130,21 @@ export default defineConfig({
 
     "tsconfig.node.json": json.dumps({
         "compilerOptions": {
-            "target": "ES2022",
-            "lib": ["ES2023"],
-            "module": "ESNext",
-            "moduleResolution": "bundler",
+            "target":                  "ES2022",
+            "lib":                     ["ES2023"],
+            "module":                  "ESNext",
+            "moduleResolution":        "bundler",
             "allowSyntheticDefaultImports": True,
-            "strict": True,
-            "noEmit": True,
-            "skipLibCheck": True,
+            "strict":                  False,
+            "noEmit":                  True,
+            "skipLibCheck":            True,
         },
         "include": ["vite.config.ts"],
     }, indent=2),
 
+    # ------------------------------------------------------------------
+    # index.html — inline reset so the page looks clean before React mounts
+    # ------------------------------------------------------------------
     "index.html": """\
 <!doctype html>
 <html lang="en">
@@ -130,6 +152,11 @@ export default defineConfig({
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>App</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: system-ui, -apple-system, sans-serif; background: #fff; color: #111; }
+      #root { min-height: 100vh; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
@@ -140,6 +167,9 @@ export default defineConfig({
 
     "src/vite-env.d.ts": '/// <reference types="vite/client" />\n',
 
+    # ------------------------------------------------------------------
+    # src/main.tsx — error boundary + React Query + PostHog
+    # ------------------------------------------------------------------
     "src/main.tsx": """\
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -147,28 +177,184 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import posthog from 'posthog-js'
 import App from './App.tsx'
 
-// PostHog analytics — only initialises when VITE_POSTHOG_KEY is set.
-// Gives growth feedback (pageviews, signups, conversions) from day 1.
+// PostHog — only fires when VITE_POSTHOG_KEY is set (free tier safe)
 const posthogKey = import.meta.env.VITE_POSTHOG_KEY as string | undefined
 if (posthogKey) {
   posthog.init(posthogKey, {
-    api_host: (import.meta.env.VITE_POSTHOG_HOST as string | undefined)
-      ?? 'https://us.i.posthog.com',
+    api_host: (import.meta.env.VITE_POSTHOG_HOST as string | undefined) ?? 'https://us.i.posthog.com',
     capture_pageview: true,
-    capture_pageleave: true,
     persistence: 'localStorage',
   })
 }
 
-const queryClient = new QueryClient()
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: 1, staleTime: 60_000 } },
+})
 
-createRoot(document.getElementById('root')!).render(
+// Explicit null-check prevents confusing 'Cannot read properties of null' errors
+const rootEl = document.getElementById('root')
+if (!rootEl) throw new Error('Root element not found — check index.html for <div id="root">')
+
+createRoot(rootEl).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <App />
     </QueryClientProvider>
   </StrictMode>,
 )
+""",
+
+    # ------------------------------------------------------------------
+    # src/lib/supabase.ts — graceful degradation when env vars missing.
+    # isSupabaseConfigured is exported so App.tsx can show SetupRequired.
+    # ------------------------------------------------------------------
+    "src/lib/supabase.ts": """\
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+
+const url = import.meta.env.VITE_SUPABASE_URL  as string | undefined
+const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+
+/** True when both VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set */
+export const isSupabaseConfigured = Boolean(
+  url && url.startsWith('https://') && key && key.length > 20
+)
+
+/**
+ * Supabase client — null when env vars are not configured.
+ * Always guard with: if (!supabase) return []
+ */
+export const supabase: SupabaseClient | null = isSupabaseConfigured
+  ? createClient(url!, key!)
+  : null
+""",
+
+    # ------------------------------------------------------------------
+    # src/components/SetupRequired.tsx — rendered by App when Supabase
+    # env vars are missing. Gives the user a clear next step.
+    # ------------------------------------------------------------------
+    "src/components/SetupRequired.tsx": """\
+export default function SetupRequired() {
+  return (
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 24,
+      background: '#f8fafc',
+    }}>
+      <div style={{
+        maxWidth: 480,
+        width: '100%',
+        background: '#fff',
+        border: '1px solid #e2e8f0',
+        borderRadius: 12,
+        padding: 40,
+        textAlign: 'center',
+      }}>
+        <div style={{ fontSize: 48, marginBottom: 20 }}>⚙️</div>
+        <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 10 }}>
+          Connect Your Database
+        </h1>
+        <p style={{ color: '#64748b', lineHeight: 1.6, marginBottom: 28 }}>
+          This app needs Supabase for authentication and data storage.
+          Add these two environment variables to get started.
+        </p>
+        <div style={{
+          background: '#f1f5f9',
+          border: '1px solid #e2e8f0',
+          borderRadius: 8,
+          padding: '14px 18px',
+          fontFamily: 'monospace',
+          fontSize: 13,
+          textAlign: 'left',
+          marginBottom: 24,
+          lineHeight: 2,
+        }}>
+          <span style={{ color: '#94a3b8' }}># .env or Railway environment vars</span><br />
+          <span style={{ color: '#0f172a' }}>VITE_SUPABASE_URL=https://xxx.supabase.co</span><br />
+          <span style={{ color: '#0f172a' }}>VITE_SUPABASE_ANON_KEY=eyJ...</span>
+        </div>
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <a
+            href="https://supabase.com/dashboard"
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              padding: '10px 22px',
+              background: '#3ecf8e',
+              color: '#fff',
+              borderRadius: 8,
+              textDecoration: 'none',
+              fontWeight: 600,
+              fontSize: 14,
+            }}
+          >
+            Get Supabase Keys →
+          </a>
+          <a
+            href="https://app.supabase.com/project/_/settings/api"
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              padding: '10px 22px',
+              background: '#f1f5f9',
+              color: '#334155',
+              borderRadius: 8,
+              textDecoration: 'none',
+              fontWeight: 600,
+              fontSize: 14,
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            Project Settings
+          </a>
+        </div>
+      </div>
+    </div>
+  )
+}
+""",
+
+    # ------------------------------------------------------------------
+    # src/App.tsx — routing shell.  Moved from LLM → scaffold because LLM
+    # was the #1 source of TypeScript errors and React mount failures.
+    # Shows SetupRequired until VITE_SUPABASE_* are configured.
+    # ------------------------------------------------------------------
+    "src/App.tsx": """\
+import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
+import { isSupabaseConfigured } from './lib/supabase'
+import SetupRequired from './components/SetupRequired'
+import Home from './pages/Home'
+
+export default function App() {
+  if (!isSupabaseConfigured) {
+    return <SetupRequired />
+  }
+
+  return (
+    <BrowserRouter>
+      <nav style={{
+        padding: '0 24px',
+        height: 52,
+        borderBottom: '1px solid #e2e8f0',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 24,
+        background: '#fff',
+      }}>
+        <Link to="/" style={{ fontWeight: 700, textDecoration: 'none', color: '#0f172a', fontSize: 16 }}>
+          App
+        </Link>
+      </nav>
+      <main style={{ padding: '32px 24px', maxWidth: 1100, margin: '0 auto' }}>
+        <Routes>
+          <Route path="/" element={<Home />} />
+        </Routes>
+      </main>
+    </BrowserRouter>
+  )
+}
 """,
 }
 
@@ -178,52 +364,74 @@ createRoot(document.getElementById('root')!).render(
 
 _SYSTEM_PROMPT = """\
 You are the Engineering Team Agent for AI Squadron.
-You generate React 19 + TypeScript source files for a SaaS MVP.
+You generate React 19 + TypeScript feature files for a SaaS MVP.
 
-The scaffold (package.json, vite.config.ts, tsconfig, index.html, src/main.tsx) \
-is already written — do NOT regenerate those.
+ALREADY PROVIDED BY SCAFFOLD (do NOT regenerate):
+  package.json, vite.config.ts, tsconfig.json, index.html
+  src/vite-env.d.ts
+  src/main.tsx         — React root, QueryClient, PostHog
+  src/App.tsx          — BrowserRouter, routes, nav, SetupRequired gate
+  src/lib/supabase.ts  — exports: supabase (SupabaseClient | null), isSupabaseConfigured
+  src/components/SetupRequired.tsx  — shown when Supabase env vars missing
 
-Generate ONLY these 5 source files (keep each SHORT — max 60 lines each):
-  src/App.tsx           — routing shell with react-router-dom
-  src/types.ts          — shared TypeScript interfaces only
-  src/lib/supabase.ts   — Supabase client init only
-  src/pages/Home.tsx    — one main page
-  src/hooks/useData.ts  — one TanStack Query hook
+GENERATE ONLY THESE 3 FILES (max 80 lines each):
 
-ALLOWED IMPORTS (already in package.json — use ONLY these):
-  react, react-dom, react-router-dom
-  @tanstack/react-query
-  @supabase/supabase-js
-  posthog-js
+1. src/types.ts
+   — Domain types for this specific app (e.g. interface Invoice, type User)
+   — No imports needed
 
-NEVER import anything else. If you need a utility, write it inline.
-Use import.meta.env.VITE_* for all config values.
+2. src/hooks/useData.ts
+   — ONE TanStack Query hook that fetches the core data from Supabase
+   — Import pattern: import { supabase } from '../lib/supabase'
+   — Guard: if (!supabase) return []
+   — Return typed data from useQuery
 
-CRITICAL OUTPUT RULE:
-  Your ENTIRE response must be ONLY the JSON object below.
-  Do NOT write any explanation, preamble, or text before or after the JSON.
-  The VERY FIRST character of your response must be the opening brace {
-  The VERY LAST character of your response must be the closing brace }
+3. src/pages/Home.tsx
+   — The main feature page shown at route "/"
+   — Import from '../lib/supabase', '../types', '../hooks/useData'
+   — Simple, functional UI — no complex state management
+   — Handle loading / error states
 
-  {"files": [{"path": "src/...", "content": "..."}]}
+STRICT RULES:
+  Only import from: react, react-router-dom, @tanstack/react-query, ../lib/supabase, ../types, ../hooks/useData
+  NEVER import: axios, zod, lucide-react, shadcn, dayjs, lodash, or any other library
+  NEVER import from @supabase/supabase-js directly (use ../lib/supabase instead)
+  Keep each file under 80 lines
+  Use plain inline styles — no CSS modules, no Tailwind, no styled-components
+
+SUPABASE PATTERN (use exactly):
+  import { supabase } from '../lib/supabase'
+  const { data } = await supabase!.from('table_name').select('*')
+
+OUTPUT RULE — CRITICAL:
+  First character of response MUST be {
+  Last character of response MUST be }
+  No explanations, no markdown, no preamble.
+  {"files": [{"path": "src/types.ts", "content": "..."}, ...]}
 """
 
 _BUILD_TEMPLATE = """\
+Build a SaaS app for this niche and tech spec.
+
+Niche: {niche}
+Venture type: {venture_type}
+
 TechSpec:
 {tech_spec}
 
-Generate the application source files listed above.
-Output ONLY the JSON.
+Remember the scaffold already provides: App.tsx, supabase.ts, SetupRequired.tsx, main.tsx.
+Generate ONLY: src/types.ts, src/hooks/useData.ts, src/pages/Home.tsx
+
+{"files": [{"path": "src/types.ts", "content": "..."}, {"path": "src/hooks/useData.ts", "content": "..."}, {"path": "src/pages/Home.tsx", "content": "..."}]}
 """
 
 _RETRY_TEMPLATE = """\
-Previous vite build failed. Apply ONLY these targeted patches — do not regenerate \
-unrelated files.
+Previous vite build failed. Apply ONLY these targeted patches — do NOT regenerate unrelated files.
 
 Fix directives:
 {critique_log}
 
-Output ONLY the corrected files:
+Output ONLY the corrected files as JSON:
 {{"files": [{{"path": "src/...", "content": "..."}}]}}
 """
 
@@ -248,11 +456,18 @@ async def engineering_team_node(state: AgentState) -> AgentState:
                     retry_count=retry_count)
 
     # ---- Call LLM ----
+    venture_brief = state.get("venture_brief") or {}
+    niche         = venture_brief.get("niche", tech_spec.get("venture_id", "productivity tool"))
+    venture_type  = tech_spec.get("product_type", "MICRO_SAAS")
     user_prompt = (
         _RETRY_TEMPLATE.format(
             critique_log=json.dumps(qa_report.get("critique_log", {}), indent=2),
         ) if is_retry else
-        _BUILD_TEMPLATE.format(tech_spec=json.dumps(tech_spec, indent=2))
+        _BUILD_TEMPLATE.format(
+            niche=niche,
+            venture_type=venture_type,
+            tech_spec=json.dumps(tech_spec, indent=2),
+        )
     )
 
     response = None
@@ -362,15 +577,15 @@ _SCAFFOLD_DEPS = [
 
 
 _ALLOWED_IMPORT_PREFIXES = (
-    # React / routing
+    # React ecosystem
     "react", "react-dom", "react-router-dom",
     # Data fetching
     "@tanstack/react-query",
-    # Supabase
+    # Supabase (direct SDK + local wrapper)
     "@supabase/supabase-js",
-    # Analytics (injected by scaffold)
+    # Analytics (scaffold-injected)
     "posthog-js",
-    # Built-in TypeScript/Node — always fine
+    # Relative imports — always fine
     "node:", "./", "../", "/", "@/",
 )
 
