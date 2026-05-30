@@ -190,14 +190,31 @@ def list_confidence_reports() -> list[dict[str, Any]]:
 
 
 def enqueue_manual_review(item: dict[str, Any]) -> None:
+    import uuid as _uuid
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+
+    # Ensure every review item has a string id so the dashboard buttons work.
+    full_item = {
+        "id": str(item.get("id") or _uuid.uuid4()),
+        "status": "PENDING",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        **item,
+    }
+
     if is_local_mode():
         data = _load_local()
         queue = data.setdefault("manual_review_queue", [])
-        queue.append({**item, "status": "PENDING", "created_at": datetime.now(timezone.utc).isoformat()})
+        queue.append(full_item)
         _save_local(data)
         return
-    db = __import__("packages.db.client", fromlist=["get_db"]).get_db()
-    db.table("manual_review_queue").insert(item).execute()
+
+    try:
+        db = __import__("packages.db.client", fromlist=["get_db"]).get_db()
+        db.table("manual_review_queue").insert(full_item).execute()
+    except Exception as exc:
+        # Never crash the pipeline because a review couldn't be queued.
+        _logger.warning("[store] enqueue_manual_review failed (Supabase): %s", exc)
 
 
 def list_manual_reviews(status: str | None = None) -> list[dict[str, Any]]:
