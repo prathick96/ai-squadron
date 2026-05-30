@@ -268,14 +268,16 @@ class Feature(BaseModel):
 
 class TechSpecPayload(BaseModel):
     venture_id: str
-    product_type: Literal["MICRO_SAAS", "MEDIA_CHANNEL", "AFFILIATE_SITE"]
+    product_type: Literal["MICRO_SAAS", "MEDIA_CHANNEL", "AFFILIATE_SITE"] = "MICRO_SAAS"
     stack: StackSpec = Field(default_factory=StackSpec)
-    features: list[Feature]
+    # list[dict[str, Any]] — LLMs return booleans/objects inside routes (auth_required, request_body)
+    features: list[dict[str, Any]] = []
     data_models: dict[str, Any] = {}
-    api_routes: list[dict[str, str]] = []
-    estimated_build_tokens: int
-    component_count: int
-    complexity: Literal["LOW", "MEDIUM", "HIGH"]
+    api_routes: list[dict[str, Any]] = []
+    environment_variables: list[str] = []
+    estimated_build_tokens: int = 0
+    component_count: int = 0
+    complexity: Literal["LOW", "MEDIUM", "HIGH"] = "MEDIUM"
 
 
 class TestResults(BaseModel):
