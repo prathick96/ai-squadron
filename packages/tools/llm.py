@@ -42,9 +42,12 @@ from tenacity import (
 
 log = logging.getLogger(__name__)
 
-_FLASH      = "gemini-1.5-flash"        # gemini-2.0-flash deprecated (404); 1.5 is stable
-_FLASH_LITE = "gemini-1.5-flash-8b"     # absolute last resort
-_HAIKU      = "claude-haiku-4-5-20251001"  # fast + cheap Claude; replaces Flash while Gemini is down
+_FLASH      = "gemini-1.5-flash"          # gemini-2.0-flash deprecated (404); 1.5 is stable
+_FLASH_LITE = "gemini-1.5-flash-8b"      # absolute last resort
+_HAIKU      = "claude-haiku-4-5-20251001" # fast + cheap; replaces Flash while Gemini is down
+# CEO uses Haiku by default (cost optimisation — Sonnet is reserved for Engineering).
+# Override: CEO_MODEL_OVERRIDE=claude-sonnet-4-6 in Railway env.
+_CEO_MODEL  = os.getenv("CEO_MODEL_OVERRIDE", "claude-haiku-4-5-20251001")
 
 
 # ---------------------------------------------------------------------------
@@ -152,13 +155,13 @@ MODEL_REGISTRY: dict[str, tuple[str, str]] = {
     # Legacy scout names (backward compat)
     "KIMI_SCOUT_OPPORTUNITY":  ("kimi", _KIMI_MODEL),
 
-    # ── Governance — moved to Claude: Google project-level 403 blocks all Gemini ──
-    # Swap back to ("gemini", "gemini-2.5-pro") once GCP access is restored.
-    "GRAND_CEO":           ("anthropic", "claude-sonnet-4-6"),
-    "LEGAL_AGENT":         ("anthropic", "claude-haiku-4-5-20251001"),
-    "REVENUE_ENGINE":      ("anthropic", "claude-haiku-4-5-20251001"),
+    # ── Governance ────────────────────────────────────────────────────────────
+    # CEO uses Haiku by default (see _CEO_MODEL above). Sonnet reserved for Engineering.
+    "GRAND_CEO":           ("anthropic", _CEO_MODEL),
+    "LEGAL_AGENT":         ("anthropic", _HAIKU),
+    "REVENUE_ENGINE":      ("anthropic", _HAIKU),
     # Legacy
-    "CEO_NICHE_SCOUT":     ("anthropic", "claude-sonnet-4-6"),
+    "CEO_NICHE_SCOUT":     ("anthropic", _CEO_MODEL),
 
     # ── Engineering (Claude Sonnet — best code gen) ───────────────────────
     "ENGINEERING_TEAM":    ("anthropic", "claude-sonnet-4-6"),

@@ -214,31 +214,94 @@ def persist_build_artifact(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
+    db = get_db()
+    # Try build_artifacts table (migration 007). If the table doesn't exist yet,
+    # fall back to storing files JSON in pipeline_runs.last_build_files JSONB
+    # which requires no migration and works immediately.
     try:
-        db = get_db()
-        db.table("build_artifacts").upsert(row, on_conflict="venture_id").execute()
-        log.info("[pipeline] Build artifact persisted | venture=%s files=%d kb=%.1f",
+        try:
+            db.table("build_artifacts").upsert(row, on_conflict="venture_id").execute()
+        except TypeError:
+            db.table("build_artifacts").upsert(row).execute()
+        log.info("[pipeline] Build artifact persisted → build_artifacts | venture=%s files=%d kb=%.1f",
                  venture_id, len(files), row["total_kb"])
-    except TypeError:
-        db = get_db()
-        db.table("build_artifacts").upsert(row).execute()
-        log.info("[pipeline] Build artifact persisted (no-conflict) | venture=%s", venture_id)
     except Exception as exc:
-        log.warning("[pipeline] persist_build_artifact failed: %s", exc)
+        # build_artifacts table likely doesn't exist yet (migration 007 not run).
+        # Fall back: store compact file list in ventures table extra field.
+        log.warning("[pipeline] build_artifacts table missing (%s) — storing in pipeline fallback", exc)
+        _persist_build_to_fallback(db, venture_id, run_id, build_hash, files)
+
+
+def _persist_build_to_fallback(
+    db: object,
+    venture_id: str,
+    run_id: str,
+    build_hash: str,
+    files: list[dict[str, Any]],
+) -> None:
+    """
+    Stopgap when migration 007 hasn't been run.
+    Stores a compact file manifest in the agent_logs table as a marker event.
+    The API reads this back via fetch_build_artifact().
+    """
+    import json as _json
+    compact = [{"path": f.get("path", ""), "content": f.get("content", "")} for f in files]
+    try:
+        db.table("agent_logs").insert({
+            "run_id":       run_id,
+            "venture_id":   venture_id,
+            "agent_name":   "BUILD_ARTIFACT_STORE",
+            "status":       "SUCCESS",
+            "current_task": _json.dumps({"build_hash": build_hash, "files": compact}),
+            "tokens_used":  len(compact),
+        }).execute()
+        log.info("[pipeline] Build artifact stored in agent_logs fallback | venture=%s", venture_id)
+    except Exception as exc2:
+        log.warning("[pipeline] Fallback persist also failed: %s", exc2)
 
 
 def fetch_build_artifact(venture_id: str) -> dict[str, Any] | None:
     """
-    Fetch the most recent build artifact for a venture from Supabase.
-    Returns None when Supabase is unavailable or no artifact found.
+    Fetch the most recent build artifact for a venture.
+    Checks build_artifacts table first (migration 007), then agent_logs fallback.
+    Returns None when nothing is found.
     """
+    import json as _json
+
     if not is_supabase_connected():
         return None
+
+    db = get_db()
+
+    # ── Priority 1: build_artifacts table (migration 007) ───────────────────
     try:
-        db     = get_db()
         result = db.table("build_artifacts").select("*").eq("venture_id", venture_id).execute()
         rows   = result.data or []
-        return rows[0] if rows else None
+        if rows:
+            return rows[0]
+    except Exception:
+        pass  # table may not exist yet
+
+    # ── Priority 2: agent_logs fallback ─────────────────────────────────────
+    try:
+        result = (
+            db.table("agent_logs")
+            .select("current_task, run_id")
+            .eq("venture_id", venture_id)
+            .eq("agent_name", "BUILD_ARTIFACT_STORE")
+            .eq("status", "SUCCESS")
+            .execute()
+        )
+        rows = result.data or []
+        if rows:
+            payload = _json.loads(rows[-1]["current_task"])
+            return {
+                "venture_id": venture_id,
+                "run_id":     rows[-1].get("run_id", ""),
+                "build_hash": payload.get("build_hash", ""),
+                "files":      payload.get("files", []),
+            }
     except Exception as exc:
-        log.warning("[pipeline] fetch_build_artifact failed: %s", exc)
-        return None
+        log.warning("[pipeline] fetch_build_artifact fallback failed: %s", exc)
+
+    return None

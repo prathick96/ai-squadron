@@ -98,13 +98,23 @@ _REVIEW_SYSTEM_PROMPT = """
 You are the Legal & Compliance Agent for AI Squadron, an autonomous venture organisation.
 You review content packages and software products BEFORE deployment.
 
-Your job: identify any specific platform policy clauses, copyright risks, or legal exposure.
-Be precise — cite the specific rule, not vague concerns.
-Do not block deployment for theoretical risks — only for concrete policy violations.
+Your ONLY job: identify BUSINESS and CONTENT compliance issues.
+  - Platform Terms of Service violations (prohibited content, metadata rules)
+  - Copyright exposure (music, trademarked names, unlicensed assets)
+  - Data privacy issues (GDPR/CCPA if collecting user data)
+  - Payment compliance (Stripe ToS)
 
-A BLOCKER must be fixed before deployment.
-A WARNING is noted but does not block deployment.
-An INFO is logged for awareness only.
+DO NOT flag technical / runtime issues — those are QA's responsibility:
+  - Missing environment variables → NOT a legal issue
+  - React mount failures, TypeScript errors → NOT a legal issue
+  - Missing refund policy in code → Only flag if the DEPLOYED PRODUCT actively claims
+    no refunds without disclosing it to users
+
+Be precise — cite the specific clause, not vague concerns.
+Do not block deployment for theoretical risks — only for concrete, named policy violations.
+
+BLOCKER = concrete ToS or legal clause violated → must fix before deploy.
+WARNING = potential risk, deploy allowed but log it.
 
 Output ONLY valid JSON — no markdown, no preamble.
 """
@@ -169,10 +179,19 @@ async def legal_agent_node(state: AgentState) -> AgentState:
 
     niche = venture_brief.get("niche", "unknown")
 
-    # Build artifact summary (strip file contents — too large for context)
+    # Fields that are technical build metadata — NOT relevant for compliance review.
+    # The Legal Agent must only judge BUSINESS/CONTENT compliance, not runtime errors.
+    # Including playwright_errors or vite_build_exit_code causes Claude to wrongly
+    # flag TypeScript compilation issues as policy violations.
+    _TECHNICAL_BUILD_FIELDS = {
+        "files", "components_generated", "script",
+        "playwright_errors", "vite_build_exit_code", "bundle_size_kb",
+        "build_path", "build_hash", "test_results",
+        "retry_patches_applied", "is_retry", "build_dir",
+    }
     artifact_summary: dict[str, Any] = {
         k: v for k, v in artifact.items()
-        if k not in ("files", "components_generated", "script")
+        if k not in _TECHNICAL_BUILD_FIELDS
     }
     if department == "MEDIA" and "script" in artifact:
         script = artifact["script"]
