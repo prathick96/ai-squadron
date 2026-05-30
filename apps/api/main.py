@@ -401,8 +401,12 @@ def kill_venture_endpoint(venture_id: str) -> dict:
 @app.get("/api/builds/{venture_id}")
 def get_build_files(venture_id: str) -> dict:
     """
-    List all generated files for a SaaS venture with metadata.
-    Files live at BUILDS_DIR/{venture_id}/ (default /tmp/squadron-builds/).
+    List generated SaaS source files for a venture.
+
+    Source priority:
+      1. /tmp/squadron-builds/{venture_id}/ — available immediately after run
+      2. Supabase build_artifacts table      — survives Railway redeploys
+
     Each entry has path, size_bytes, and a 300-char preview.
     node_modules and dist/ are excluded from the listing.
     """
@@ -411,42 +415,71 @@ def get_build_files(venture_id: str) -> dict:
     builds_root = _P(_bos.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
     build_dir   = builds_root / venture_id
 
-    if not build_dir.is_dir():
-        raise HTTPException(404, f"No build found for {venture_id}. "
-                                 "Run a PRODUCT pipeline first.")
-
-    files = []
+    source = "disk"
+    files: list[dict] = []
     total_bytes = 0
-    for f in sorted(build_dir.rglob("*")):
-        if not f.is_file():
-            continue
-        if "node_modules" in f.parts or ".git" in f.parts or "dist" in f.parts:
-            continue
-        rel  = f.relative_to(build_dir).as_posix()
-        size = f.stat().st_size
-        total_bytes += size
-        try:
-            preview = f.read_text(encoding="utf-8", errors="replace")[:300]
-        except Exception:
-            preview = ""
-        files.append({"path": rel, "size_bytes": size, "preview": preview})
+    dist_exists = False
+    dist_kb = 0.0
 
-    dist_dir = build_dir / "dist"
-    dist_kb  = 0
-    if dist_dir.is_dir():
-        dist_kb = round(sum(f.stat().st_size for f in dist_dir.rglob("*") if f.is_file()) / 1024, 1)
+    # ── Priority 1: local disk (fast, current deployment only) ──────────────
+    if build_dir.is_dir():
+        for f in sorted(build_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            if "node_modules" in f.parts or ".git" in f.parts or "dist" in f.parts:
+                continue
+            rel  = f.relative_to(build_dir).as_posix()
+            size = f.stat().st_size
+            total_bytes += size
+            try:
+                preview = f.read_text(encoding="utf-8", errors="replace")[:300]
+            except Exception:
+                preview = ""
+            files.append({"path": rel, "size_bytes": size, "preview": preview})
+
+        dist_dir = build_dir / "dist"
+        dist_exists = dist_dir.is_dir()
+        if dist_exists:
+            dist_kb = round(sum(f.stat().st_size for f in dist_dir.rglob("*") if f.is_file()) / 1024, 1)
+
+    # ── Priority 2: Supabase build_artifacts (survives redeploys) ───────────
+    if not files:
+        try:
+            from packages.db.pipeline import fetch_build_artifact
+            artifact = fetch_build_artifact(venture_id)
+            if artifact and artifact.get("files"):
+                source = "supabase"
+                raw_files = artifact["files"]
+                for f in raw_files:
+                    content = f.get("content", "")
+                    size    = len(content.encode())
+                    total_bytes += size
+                    files.append({
+                        "path":       f.get("path", ""),
+                        "size_bytes": size,
+                        "preview":    content[:300],
+                    })
+        except Exception as exc:
+            log.warning("[API] fetch_build_artifact failed: %s", exc)
+
+    if not files:
+        raise HTTPException(
+            404,
+            f"No build found for {venture_id}. "
+            "Run a PRODUCT pipeline first — files persist to Supabase going forward.",
+        )
 
     return {
         "venture_id":  venture_id,
-        "build_dir":   str(build_dir),
+        "source":      source,       # "disk" | "supabase"
         "file_count":  len(files),
         "total_kb":    round(total_bytes / 1024, 1),
-        "dist_exists": dist_dir.is_dir(),
+        "dist_exists": dist_exists,
         "dist_kb":     dist_kb,
         "validate": {
-            "local_dev":    f"cd {build_dir} && npm install && npm run dev",
-            "local_build":  f"cd {build_dir} && npm run build",
-            "preview_url":  "http://localhost:5173  (after npm run dev)",
+            "download_zip":  f"/api/builds/{venture_id}/download",
+            "local_run":     "unzip then: npm install && npm run dev → http://localhost:5173",
+            "local_build":   "npm run build && npx serve dist",
         },
         "files": files,
     }
@@ -475,7 +508,11 @@ def get_build_file(venture_id: str, path: str) -> dict:
 
 @app.get("/api/builds/{venture_id}/download")
 def download_build(venture_id: str):
-    """Download all source files (no node_modules) as a ZIP."""
+    """
+    Download all source files as a ZIP (no node_modules/dist).
+    Falls back to Supabase build_artifacts if disk files are gone.
+    Unzip and run: npm install && npm run dev
+    """
     import io
     import os as _bos
     import zipfile
@@ -485,19 +522,35 @@ def download_build(venture_id: str):
     builds_root = _P(_bos.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
     build_dir   = builds_root / venture_id
 
-    if not build_dir.is_dir():
-        raise HTTPException(404, f"No build found for {venture_id}")
-
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in sorted(build_dir.rglob("*")):
-            if not f.is_file():
-                continue
-            if "node_modules" in f.parts or ".git" in f.parts:
-                continue
-            zf.write(f, arcname=f.relative_to(build_dir))
-    buf.seek(0)
 
+    if build_dir.is_dir():
+        # Build from disk
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in sorted(build_dir.rglob("*")):
+                if not f.is_file():
+                    continue
+                if "node_modules" in f.parts or ".git" in f.parts:
+                    continue
+                zf.write(f, arcname=f.relative_to(build_dir))
+    else:
+        # Fall back to Supabase
+        try:
+            from packages.db.pipeline import fetch_build_artifact
+            artifact = fetch_build_artifact(venture_id)
+            if not artifact or not artifact.get("files"):
+                raise HTTPException(404, f"No build found for {venture_id}. Run a PRODUCT pipeline first.")
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for f in artifact["files"]:
+                    path    = f.get("path", "unnamed.txt")
+                    content = f.get("content", "").encode()
+                    zf.writestr(path, content)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(500, f"Build retrieval failed: {exc}") from exc
+
+    buf.seek(0)
     return StreamingResponse(
         buf,
         media_type="application/zip",

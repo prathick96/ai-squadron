@@ -186,3 +186,59 @@ def kill_venture(venture_id: str) -> bool:
     except Exception as exc:
         log.warning("[pipeline] kill_venture failed: %s", exc)
         return False
+
+
+def persist_build_artifact(
+    venture_id: str,
+    run_id: str,
+    build_hash: str,
+    files: list[dict[str, Any]],
+) -> None:
+    """
+    Persist generated SaaS source files to Supabase build_artifacts table.
+    Called by engineering_team after successfully writing files to disk.
+    Survives Railway redeploys — /tmp/ is ephemeral, Supabase is permanent.
+    """
+    if not is_supabase_connected():
+        log.debug("[pipeline] Supabase not connected — build_artifact not persisted")
+        return
+
+    total_bytes = sum(len((f.get("content") or "").encode()) for f in files)
+    row = {
+        "venture_id": venture_id,
+        "run_id":     run_id,
+        "build_hash": build_hash,
+        "files":      files,
+        "file_count": len(files),
+        "total_kb":   round(total_bytes / 1024, 1),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        db = get_db()
+        db.table("build_artifacts").upsert(row, on_conflict="venture_id").execute()
+        log.info("[pipeline] Build artifact persisted | venture=%s files=%d kb=%.1f",
+                 venture_id, len(files), row["total_kb"])
+    except TypeError:
+        db = get_db()
+        db.table("build_artifacts").upsert(row).execute()
+        log.info("[pipeline] Build artifact persisted (no-conflict) | venture=%s", venture_id)
+    except Exception as exc:
+        log.warning("[pipeline] persist_build_artifact failed: %s", exc)
+
+
+def fetch_build_artifact(venture_id: str) -> dict[str, Any] | None:
+    """
+    Fetch the most recent build artifact for a venture from Supabase.
+    Returns None when Supabase is unavailable or no artifact found.
+    """
+    if not is_supabase_connected():
+        return None
+    try:
+        db     = get_db()
+        result = db.table("build_artifacts").select("*").eq("venture_id", venture_id).execute()
+        rows   = result.data or []
+        return rows[0] if rows else None
+    except Exception as exc:
+        log.warning("[pipeline] fetch_build_artifact failed: %s", exc)
+        return None

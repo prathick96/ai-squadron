@@ -284,6 +284,16 @@ async def engineering_team_node(state: AgentState) -> AgentState:
         log_agent_event(run_id, venture_id, "ENGINEERING_TEAM", "FAILED", error_detail=str(exc))
         return {**state, "last_error": str(exc)}
 
+    # Persist file contents to Supabase so they survive Railway redeploys.
+    # /tmp/ is ephemeral; Supabase is permanent. Done before npm install
+    # so a slow npm doesn't delay persistence.
+    build_hash_early = hashlib.sha256(json.dumps(llm_files).encode()).hexdigest()[:16]
+    try:
+        from packages.db.pipeline import persist_build_artifact
+        persist_build_artifact(venture_id, run_id, build_hash_early, llm_files)
+    except Exception as exc:
+        log.warning("[ENGINEERING_NODE] Supabase persist failed (non-blocking): %s", exc)
+
     # ---- npm install (skip on retry if node_modules exists) ----
     node_modules = build_dir / "node_modules"
     if not is_retry or not node_modules.exists():
