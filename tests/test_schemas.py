@@ -7,13 +7,12 @@ Run: pytest tests/test_schemas.py -v
 import pytest
 from pydantic import ValidationError
 from packages.schemas.events import (
-    AgentID, Competitor, CritiqueLog, EventEnvelope, EventMetadata,
+    AgentID, CritiqueLog, EventEnvelope, EventMetadata,
     EventType, Priority, QACheckError, VentureBriefPayload, TechSpecPayload,
     StackSpec, Feature, BuildCompletePayload, TestResults,
     AudioAsset, VideoAsset, ThumbnailAsset, ScriptSpec, SeoMetadata,
     ContentPackagePayload, QAPassedPayload, QAFailedPayload,
     SecurityClearancePayload, TosStatus, PostingWindow,
-    DeploymentCompletePayload, DeploymentEntry,
     GrowthReportPayload, PortfolioSummary, VenturePerformance,
     make_event,
 )

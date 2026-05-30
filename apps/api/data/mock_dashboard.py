@@ -72,7 +72,6 @@ def revenue_summary() -> dict:
 
 
 def portfolio_slots(total: int = 450) -> list[dict]:
-    stages = ["IDEATION", "DEVELOPMENT", "QA", "LIVE", "SCALING", "KILLED"]
     slots = []
     for i in range(total):
         if i == 0:

@@ -4,15 +4,13 @@ Day 2 revenue cycle, scorecards, and confidence report tests.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
 
 import pytest
 
 from packages.revenue.confidence import build_confidence_report
 from packages.revenue.cycle import run_day2_cycle
 from packages.revenue.scorecard import build_venture_scorecards
-from packages.revenue.store import _STORE_PATH, _load_local, _save_local, is_local_mode
+from packages.revenue.store import _save_local, is_local_mode
 
 
 @pytest.fixture(autouse=True)

@@ -4,7 +4,6 @@ Unit tests for adaptive Kimi K2.6 routing and OpenAI-compatible provider wrapper
 """
 from __future__ import annotations
 
-import os
 import pytest
 from unittest.mock import AsyncMock, patch
 

@@ -19,7 +19,6 @@ Runs as a standalone check triggered by Analytics Agent or Revenue Engine.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 from packages.db.client import log_agent_event
 from packages.state.agent_state import AgentState, update_stage

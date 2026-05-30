@@ -26,7 +26,6 @@ def _qa_first_pass_rate(venture_id: str) -> float:
 
 def _signal_for_venture(v: dict, mrr: float, burn: float, qa_rate: float, visits: int) -> tuple[str, str]:
     days = v.get("days_live", 0)
-    vid = v["venture_id"]
 
     if mrr >= SCALE_MRR:
         return "SCALE", f"MRR ${mrr:.2f} >= scale threshold ${SCALE_MRR}"

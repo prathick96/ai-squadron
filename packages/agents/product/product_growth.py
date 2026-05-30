@@ -13,10 +13,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
 
 from packages.db.client import log_agent_event
-from packages.schemas.events import AgentID, EventType, make_event
 from packages.state.agent_state import AgentState, append_event, update_stage
 from packages.tools.llm import call_llm
 

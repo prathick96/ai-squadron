@@ -20,22 +20,23 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Literal
 
 # Ensure repo root is on the path when running directly
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from apps.orchestrator.graph import build_squadron_graph
-from typing import Literal
-from packages.db.client import is_supabase_connected
-from packages.db.pipeline import (
+from apps.orchestrator.graph import build_squadron_graph  # noqa: E402
+from packages.db.client import is_supabase_connected  # noqa: E402
+from packages.db.pipeline import (  # noqa: E402
     begin_pipeline_run,
     complete_pipeline_run,
     persist_event_log,
 )
-from packages.state.agent_state import init_state
+from packages.state.agent_state import init_state  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -134,7 +135,7 @@ def run_dry_run(department: str = "AUTO") -> None:
     """
     log.info("Running dry-run validation (department=%s)...", department)
     try:
-        graph = build_squadron_graph(department)  # type: ignore[arg-type]
+        build_squadron_graph(department)  # type: ignore[arg-type]
         state = init_state()
         log.info("✓ Graph compiled successfully")
         log.info("✓ AgentState initialised: run_id=%s", state["run_id"])
@@ -182,14 +183,14 @@ def _print_pipeline_summary(state: dict) -> None:
 
     dossier = state.get("research_dossier") or {}
     if dossier:
-        print(f"\n  Research Council:")
+        print("\n  Research Council:")
         print(f"    Primary niche : {dossier.get('recommended_primary_niche', 'N/A')}")
         print(f"    Confidence  : {dossier.get('council_confidence', 0):.2f}")
         print(f"    Mode          : {dossier.get('research_mode', 'N/A')}")
 
     brief = state.get("venture_brief") or {}
     if brief:
-        print(f"\n  Venture Brief:")
+        print("\n  Venture Brief:")
         print(f"    Niche        : {brief.get('niche', 'N/A')}")
         print(f"    Type         : {brief.get('venture_type', 'N/A')}")
         print(f"    Go Decision  : {'✓ YES' if brief.get('go_decision') else '✗ NO'}")

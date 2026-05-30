@@ -61,9 +61,12 @@ class Settings:
     def validate(self) -> list[str]:
         """Returns list of missing required keys. Empty list = ready to run."""
         missing = []
-        if not self.GEMINI_API_KEY:    missing.append("GEMINI_API_KEY")
-        if not self.ANTHROPIC_API_KEY: missing.append("ANTHROPIC_API_KEY")
-        if not self.SUPABASE_URL:      missing.append("SUPABASE_URL (optional for Phase 0)")
+        if not self.GEMINI_API_KEY:
+            missing.append("GEMINI_API_KEY")
+        if not self.ANTHROPIC_API_KEY:
+            missing.append("ANTHROPIC_API_KEY")
+        if not self.SUPABASE_URL:
+            missing.append("SUPABASE_URL (optional for Phase 0)")
         return missing
 
 settings = Settings()

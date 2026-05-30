@@ -32,7 +32,6 @@ async def video_agent_node(state: AgentState) -> AgentState:
     run_id = state["run_id"]
     venture_id = state["venture_id"]
     voice = state.get("voice_package") or {}
-    script = state.get("script_package") or {}
 
     duration_sec = voice.get("duration_sec", 480)
     platform = voice.get("platform", "youtube")

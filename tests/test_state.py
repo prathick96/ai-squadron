@@ -3,8 +3,7 @@ tests/test_state.py
 Unit tests for AgentState schema and helper functions.
 Run: pytest tests/test_state.py -v
 """
-import pytest
-from packages.state.agent_state import AgentState, append_event, init_state, update_stage
+from packages.state.agent_state import append_event, init_state, update_stage
 
 
 def test_init_state_defaults():

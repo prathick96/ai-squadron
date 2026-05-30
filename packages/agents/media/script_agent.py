@@ -70,7 +70,6 @@ async def script_agent_node(state: AgentState) -> AgentState:
     run_id = state["run_id"]
     venture_id = state["venture_id"]
     strategy = state.get("channel_strategy") or {}
-    brief = state.get("venture_brief") or {}
     is_retry = state.get("qa_retry_count", 0) > 0
 
     platform = strategy.get("primary_platform", "youtube")

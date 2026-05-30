@@ -39,8 +39,6 @@ _POSTING_WINDOWS: dict[str, dict] = {
 async def security_agent_node(state: AgentState) -> AgentState:
     run_id = state["run_id"]
     venture_id = state["venture_id"]
-    department = state.get("department", "PRODUCT")
-    content = state.get("content_package") or {}
     legal = state.get("legal_clearance") or {}
 
     if not legal.get("is_cleared", False):

@@ -9,6 +9,8 @@ from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock, patch
 
+from fastapi.testclient import TestClient
+from apps.api.main import app
 from packages.orchestrator.runner import RunRecord, RunRegistry
 
 
@@ -87,7 +89,6 @@ def test_registry_list_recent_newest_first():
 
 
 def test_registry_eviction():
-    reg = RunRegistry()
     # Override max to keep test fast
     import packages.orchestrator.runner as r_mod
     original_max = r_mod._MAX_RUNS
@@ -123,9 +124,6 @@ def test_registry_noop_on_unknown_run_id():
 # ---------------------------------------------------------------------------
 # API endpoint tests (uses FastAPI TestClient)
 # ---------------------------------------------------------------------------
-
-from fastapi.testclient import TestClient
-from apps.api.main import app
 
 client = TestClient(app, raise_server_exceptions=False)
 

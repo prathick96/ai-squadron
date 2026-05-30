@@ -290,7 +290,7 @@ def _deterministic_checks(
                     "clause": "Title length policy",
                     "description": f"Title is {len(title)} chars (max 100)",
                     "severity": "BLOCKER",
-                    "recommendation": f"Shorten title to under 100 characters",
+                    "recommendation": "Shorten title to under 100 characters",
                 })
             # Prohibited patterns
             title_lower = title.lower()

@@ -13,7 +13,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 try:
-    from supabase import create_client, Client as SupabaseClient
+    from supabase import create_client
     _SUPABASE_AVAILABLE = True
 except ImportError:
     _SUPABASE_AVAILABLE = False
