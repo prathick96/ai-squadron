@@ -665,7 +665,7 @@ def make_event(
     event_type: EventType,
     source_agent: AgentID,
     target_agent: AgentID,
-    payload: BaseModel,
+    payload: "BaseModel | dict[str, Any]",
     run_id: str,
     venture_id: str,
     pipeline_stage: str,
@@ -674,13 +674,18 @@ def make_event(
     token_cost: int = 0,
     latency_ms: int = 0,
 ) -> EventEnvelope:
+    # Accept both Pydantic models (call model_dump) and plain dicts (use as-is).
+    # Several media agents pass lightweight dict payloads for internal events.
+    payload_dict = payload.model_dump() if hasattr(payload, "model_dump") else (
+        payload if isinstance(payload, dict) else {}
+    )
     return EventEnvelope(
         event_type=event_type,
         source_agent=source_agent,
         target_agent=target_agent,
         priority=priority,
         correlation_id=correlation_id or str(uuid.uuid4()),
-        payload=payload.model_dump(),
+        payload=payload_dict,
         metadata=EventMetadata(
             run_id=run_id,
             venture_id=venture_id,
