@@ -10,15 +10,23 @@ Retry strategy:
   - Empty response (safety filter)   : raise ValueError so fallback fires
   - All other errors                  : raise immediately
 
-Model tier:
-  Governance agents (CEO, Legal) use Flash by default.
-  Swap to gemini-2.5-pro once the API key has Pro access enabled.
+Markdown stripping:
+  All providers sometimes wrap JSON in ```json ... ``` code fences even when
+  instructed not to. _strip_code_fences() is applied to every response before
+  it is returned, so all agents can safely call json.loads(response.text).
+
+Provider status (May 2026):
+  - Gemini:    Google account-level 403 + gemini-2.0-flash 404 deprecated
+  - Anthropic: Fully working — all governance + operational agents on Claude
+  - Kimi:      Working via OpenRouter — Research Council only
+  Swap back to Gemini when Google access is restored.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import re
 import time
 from typing import Any
 
@@ -34,8 +42,40 @@ from tenacity import (
 
 log = logging.getLogger(__name__)
 
-_FLASH  = "gemini-2.0-flash"
-_FLASH_LITE = "gemini-2.0-flash-lite"   # absolute last resort
+_FLASH      = "gemini-1.5-flash"        # gemini-2.0-flash deprecated (404); 1.5 is stable
+_FLASH_LITE = "gemini-1.5-flash-8b"     # absolute last resort
+_HAIKU      = "claude-haiku-4-5-20251001"  # fast + cheap Claude; replaces Flash while Gemini is down
+
+
+# ---------------------------------------------------------------------------
+# Markdown code-fence stripper — applied to ALL LLM responses
+# ---------------------------------------------------------------------------
+_CODE_FENCE_RE = re.compile(
+    r'^```(?:json|python|javascript|typescript|text|xml|yaml|markdown)?\s*\n?',
+    re.MULTILINE,
+)
+
+def _strip_code_fences(text: str) -> str:
+    """
+    Remove markdown code fences that LLMs sometimes add despite instructions.
+
+    Handles:
+      ```json\\n{...}\\n```      → {...}
+      ```\\n{...}\\n```          → {...}
+      {... no fences ...}        → unchanged
+
+    Applied to every provider response so all agents can safely call
+    json.loads(response.text) without worrying about fence wrapping.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    # Remove opening fence line
+    stripped = _CODE_FENCE_RE.sub("", stripped, count=1)
+    # Remove closing fence
+    if stripped.endswith("```"):
+        stripped = stripped[: stripped.rfind("```")].rstrip()
+    return stripped.strip()
 
 # ---------------------------------------------------------------------------
 # Lazy singletons
@@ -97,33 +137,34 @@ MODEL_REGISTRY: dict[str, tuple[str, str]] = {
     # Legacy
     "QA_AUDITOR_CRITIQUE": ("anthropic", "claude-haiku-4-5-20251001"),
 
-    # ── All other agents (Gemini Flash — cost-efficient) ──────────────────
-    "PRODUCT_VP":          ("gemini", _FLASH),
-    "PRODUCT_MANAGER":     ("gemini", _FLASH),
-    "MEDIA_VP":            ("gemini", _FLASH),
-    "SCRIPT_AGENT":        ("gemini", _FLASH),
-    "VOICE_AGENT":         ("gemini", _FLASH),
-    "VIDEO_AGENT":         ("gemini", _FLASH),
-    "THUMBNAIL_AGENT":     ("gemini", _FLASH),
-    "SEO_METADATA_AGENT":  ("gemini", _FLASH),
-    "QA_TECHNICAL_GATE":   ("gemini", _FLASH),
-    "QA_COMPLIANCE_GATE":  ("gemini", _FLASH),
-    "SECURITY_AGENT":      ("gemini", _FLASH),
-    "ANTI_BAN_AGENT":      ("gemini", _FLASH),
-    "DEPLOYMENT_AGENT":    ("gemini", _FLASH),
-    "MARKETING_SEO":       ("gemini", _FLASH),
-    "PUBLISHING_AGENT":    ("gemini", _FLASH),
-    "ANALYTICS_AGENT":     ("gemini", _FLASH),
-    "PRODUCT_GROWTH":      ("gemini", _FLASH),
-    "MEDIA_GROWTH":        ("gemini", _FLASH),
+    # ── Operational agents — Claude Haiku (fast, cheap, no Google dependency) ──
+    # gemini-2.0-flash deprecated (404 May 2026). Swap back when Google is stable.
+    "PRODUCT_VP":          ("anthropic", _HAIKU),
+    "PRODUCT_MANAGER":     ("anthropic", _HAIKU),
+    "MEDIA_VP":            ("anthropic", _HAIKU),
+    "SCRIPT_AGENT":        ("anthropic", _HAIKU),
+    "VOICE_AGENT":         ("anthropic", _HAIKU),
+    "VIDEO_AGENT":         ("anthropic", _HAIKU),
+    "THUMBNAIL_AGENT":     ("anthropic", _HAIKU),
+    "SEO_METADATA_AGENT":  ("anthropic", _HAIKU),
+    "QA_TECHNICAL_GATE":   ("anthropic", _HAIKU),
+    "QA_COMPLIANCE_GATE":  ("anthropic", _HAIKU),
+    "SECURITY_AGENT":      ("anthropic", _HAIKU),
+    "ANTI_BAN_AGENT":      ("anthropic", _HAIKU),
+    "DEPLOYMENT_AGENT":    ("anthropic", _HAIKU),
+    "MARKETING_SEO":       ("anthropic", _HAIKU),
+    "PUBLISHING_AGENT":    ("anthropic", _HAIKU),
+    "ANALYTICS_AGENT":     ("anthropic", _HAIKU),
+    "PRODUCT_GROWTH":      ("anthropic", _HAIKU),
+    "MEDIA_GROWTH":        ("anthropic", _HAIKU),
     # Legacy
-    "PRODUCT_TEAM":        ("gemini", _FLASH),
-    "CONTENT_TEAM":        ("gemini", _FLASH),
-    "MARKETING_TEAM":      ("gemini", _FLASH),
-    "GLOBAL_TEAM":         ("gemini", _FLASH),
-    "GROWTH_TEAM":         ("gemini", _FLASH),
-    "DEPLOYMENT_TEAM":     ("gemini", _FLASH),
-    "QA_AUDITOR_GATE":     ("gemini", _FLASH),
+    "PRODUCT_TEAM":        ("anthropic", _HAIKU),
+    "CONTENT_TEAM":        ("anthropic", _HAIKU),
+    "MARKETING_TEAM":      ("anthropic", _HAIKU),
+    "GLOBAL_TEAM":         ("anthropic", _HAIKU),
+    "GROWTH_TEAM":         ("anthropic", _HAIKU),
+    "DEPLOYMENT_TEAM":     ("anthropic", _HAIKU),
+    "QA_AUDITOR_GATE":     ("anthropic", _HAIKU),
 }
 
 # ---------------------------------------------------------------------------
@@ -218,7 +259,7 @@ async def _gemini_raw(
     )
 
     latency_ms    = int((time.monotonic() - t0) * 1000)
-    text          = response.text or ""
+    text          = _strip_code_fences(response.text or "")
     usage         = getattr(response, "usage_metadata", None)
     input_tokens  = getattr(usage, "prompt_token_count",     0) if usage else 0
     output_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
@@ -309,9 +350,17 @@ async def _call_anthropic(
     )
 
     latency_ms    = int((time.monotonic() - t0) * 1000)
-    text          = response.content[0].text if response.content else ""
+    raw_text      = response.content[0].text if response.content else ""
+    text          = _strip_code_fences(raw_text)
     input_tokens  = response.usage.input_tokens
     output_tokens = response.usage.output_tokens
+
+    if not text:
+        stop_reason = getattr(response, "stop_reason", "unknown")
+        raise ValueError(
+            f"Anthropic {model_name} returned empty response "
+            f"(stop_reason={stop_reason}). Check API key credits and prompt safety."
+        )
 
     log.debug("Anthropic %s → %d tokens %dms", model_name, input_tokens + output_tokens, latency_ms)
     return LLMResponse(text, input_tokens, output_tokens, latency_ms, model_used=model_name)
@@ -369,7 +418,7 @@ async def _call_openai_compatible(
         resp.raise_for_status()
         data = resp.json()
 
-    text = data["choices"][0]["message"]["content"] or ""
+    text = _strip_code_fences(data["choices"][0]["message"]["content"] or "")
     usage = data.get("usage", {})
     latency_ms = int((time.monotonic() - t0) * 1000)
     inp = usage.get("prompt_tokens", 0)
