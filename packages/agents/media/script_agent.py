@@ -19,7 +19,7 @@ import logging
 from packages.db.client import log_agent_event
 from packages.schemas.events import AgentID, EventType, make_event
 from packages.state.agent_state import AgentState, ScriptPackage, append_event, update_stage
-from packages.tools.llm import call_llm
+from packages.tools.llm import call_llm, extract_json
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ async def script_agent_node(state: AgentState) -> AgentState:
 
     try:
         response = await call_llm("SCRIPT_AGENT", _SYSTEM_PROMPT, user_prompt, temperature=0.6)
-        script_data: dict = json.loads(response.text)
+        script_data: dict = json.loads(extract_json(response.text))
     except Exception as exc:
         log.error("[SCRIPT_NODE] failed: %s", exc)
         log_agent_event(run_id, venture_id, "SCRIPT_AGENT", "FAILED", error_detail=str(exc))

@@ -18,7 +18,7 @@ import logging
 from packages.db.client import log_agent_event
 from packages.schemas.events import AgentID, EventType, MediaVPBriefPayload, make_event
 from packages.state.agent_state import AgentState, append_event, update_stage
-from packages.tools.llm import call_llm
+from packages.tools.llm import call_llm, extract_json
 
 log = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ async def media_vp_node(state: AgentState) -> AgentState:
 
     try:
         response = await call_llm("MEDIA_VP", _SYSTEM_PROMPT, user_prompt, temperature=0.3)
-        memo: dict = json.loads(response.text)
+        memo: dict = json.loads(extract_json(response.text))
     except Exception as exc:
         log.error("[MEDIA_VP_NODE] failed: %s", exc)
         log_agent_event(run_id, venture_id, "MEDIA_VP", "FAILED", error_detail=str(exc))

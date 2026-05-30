@@ -77,6 +77,38 @@ def _strip_code_fences(text: str) -> str:
         stripped = stripped[: stripped.rfind("```")].rstrip()
     return stripped.strip()
 
+
+def extract_json(text: str) -> str:
+    """
+    Robustly extract a JSON object or array from LLM output.
+
+    Handles all the ways LLMs deviate from 'output ONLY valid JSON':
+      1. Clean JSON                     → returned as-is
+      2. JSON inside ```json ... ```    → fences stripped first
+      3. Preamble text before JSON      → 'Here is the code: {...}' → '{...}'
+      4. Preamble + fences              → both stripped
+
+    The 'char 0' JSONDecodeError ('Expecting value: line 1 col 1') is always
+    caused by a non-JSON first character, i.e. case 3.  This function fixes it.
+    """
+    # Step 1: strip code fences
+    cleaned = _strip_code_fences(text.strip())
+
+    # Step 2: if it already starts with a JSON opener, we're done
+    if cleaned.startswith(("{", "[")):
+        return cleaned
+
+    # Step 3: find the first JSON opener buried in preamble text
+    first_brace  = cleaned.find("{")
+    first_bracket = cleaned.find("[")
+
+    candidates = [i for i in (first_brace, first_bracket) if i != -1]
+    if not candidates:
+        return cleaned  # nothing found — let json.loads give the real error
+
+    start = min(candidates)
+    return cleaned[start:]
+
 # ---------------------------------------------------------------------------
 # Lazy singletons
 # ---------------------------------------------------------------------------

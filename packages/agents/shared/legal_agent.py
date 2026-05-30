@@ -31,7 +31,7 @@ from packages.schemas.events import (
     AgentID, EventType, LegalClearancePayload, PolicyFlag, make_event,
 )
 from packages.state.agent_state import AgentState, LegalClearance, append_event, update_stage
-from packages.tools.llm import call_llm
+from packages.tools.llm import call_llm, extract_json
 
 log = logging.getLogger(__name__)
 
@@ -198,7 +198,7 @@ async def legal_agent_node(state: AgentState) -> AgentState:
         response = await call_llm(
             "LEGAL_AGENT", _REVIEW_SYSTEM_PROMPT, user_prompt, temperature=0.1,
         )
-        review: dict[str, Any] = json.loads(response.text)
+        review: dict[str, Any] = json.loads(extract_json(response.text))
         llm_flags = review.get("policy_flags", [])
         llm_cleared = review.get("is_cleared", True)
         copyright_clear = review.get("copyright_clear", True)

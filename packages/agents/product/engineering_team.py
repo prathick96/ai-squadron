@@ -34,7 +34,7 @@ from packages.schemas.events import (
     AgentID, BuildCompletePayload, EventType, TestResults, make_event,
 )
 from packages.state.agent_state import AgentState, BuildArtifact, append_event, update_stage
-from packages.tools.llm import call_llm
+from packages.tools.llm import call_llm, extract_json
 
 log = logging.getLogger(__name__)
 
@@ -183,20 +183,26 @@ You generate React 19 + TypeScript source files for a SaaS MVP.
 The scaffold (package.json, vite.config.ts, tsconfig, index.html, src/main.tsx) \
 is already written — do NOT regenerate those.
 
-Generate ONLY the application-specific source files:
-  src/App.tsx           — routing shell with react-router-dom
-  src/types.ts          — shared TypeScript interfaces
-  src/lib/supabase.ts   — Supabase client (reads VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY)
-  src/pages/            — one file per page
-  src/components/       — shared UI components
-  src/hooks/            — TanStack Query hooks
+Generate ONLY these application-specific source files (keep each file SHORT):
+  src/App.tsx           — routing shell with react-router-dom (max 60 lines)
+  src/types.ts          — shared TypeScript interfaces only
+  src/lib/supabase.ts   — Supabase client init only
+  src/pages/Home.tsx    — one main page (max 80 lines)
+  src/hooks/useData.ts  — one TanStack Query hook
 
 Rules:
   - No placeholders or TODOs
   - All env vars via import.meta.env.VITE_* (never hardcoded)
   - No imports from packages not in the scaffold's package.json
-  - Keep components small and focused — one responsibility each
-  - Output ONLY valid JSON: {"files": [{"path": "src/...", "content": "..."}]}
+  - Keep files minimal — we can expand later
+
+CRITICAL OUTPUT RULE:
+  Your ENTIRE response must be ONLY the JSON object below.
+  Do NOT write any explanation, preamble, or text before or after the JSON.
+  The VERY FIRST character of your response must be the opening brace {
+  The VERY LAST character of your response must be the closing brace }
+
+  {"files": [{"path": "src/...", "content": "..."}]}
 """
 
 _BUILD_TEMPLATE = """\
@@ -246,15 +252,23 @@ async def engineering_team_node(state: AgentState) -> AgentState:
         _BUILD_TEMPLATE.format(tech_spec=json.dumps(tech_spec, indent=2))
     )
 
+    response = None
     try:
         response = await call_llm(
             "ENGINEERING_TEAM", _SYSTEM_PROMPT, user_prompt,
-            temperature=0.1, max_tokens=8192,
+            temperature=0.1, max_tokens=8192,   # hard ceiling for claude-sonnet-4-6
         )
-        build_data: dict = json.loads(response.text)
+        # extract_json handles preamble text ("Here is the code: {...}") and
+        # code fences (``` json {...} ```) — the "char 0" JSONDecodeError is
+        # always caused by a non-JSON first character.
+        json_text  = extract_json(response.text)
+        build_data: dict = json.loads(json_text)
     except Exception as exc:
-        log.error("[ENGINEERING_NODE] LLM call failed: %s", exc)
-        log_agent_event(run_id, venture_id, "ENGINEERING_TEAM", "FAILED", error_detail=str(exc))
+        tokens = response.total_tokens if response else 0
+        log.error("[ENGINEERING_NODE] LLM call failed: %s | tokens=%d | raw_start=%r",
+                  exc, tokens, (response.text[:120] if response else ""))
+        log_agent_event(run_id, venture_id, "ENGINEERING_TEAM", "FAILED",
+                        error_detail=str(exc), tokens_used=tokens)
         return {**state, "last_error": str(exc)}
 
     llm_files: list[dict] = build_data.get("files", [])

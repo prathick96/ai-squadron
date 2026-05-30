@@ -22,7 +22,7 @@ from packages.schemas.events import (
     AudioAsset, ScriptSpec, SeoMetadata, ThumbnailAsset, VideoAsset, make_event,
 )
 from packages.state.agent_state import AgentState, ContentPackage, append_event, update_stage
-from packages.tools.llm import call_llm
+from packages.tools.llm import call_llm, extract_json
 
 log = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ async def seo_metadata_node(state: AgentState) -> AgentState:
 
     try:
         response = await call_llm("SEO_METADATA_AGENT", _SYSTEM_PROMPT, user_prompt, temperature=0.4)
-        seo_data: dict = json.loads(response.text)
+        seo_data: dict = json.loads(extract_json(response.text))
     except Exception as exc:
         log.error("[SEO_METADATA_NODE] failed: %s", exc)
         log_agent_event(run_id, venture_id, "SEO_METADATA_AGENT", "FAILED", error_detail=str(exc))

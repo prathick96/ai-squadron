@@ -27,7 +27,7 @@ from packages.schemas.events import (
     QAFailedPayload, QAPassedPayload, make_event,
 )
 from packages.state.agent_state import AgentState, QAReport, append_event, update_stage
-from packages.tools.llm import call_llm
+from packages.tools.llm import call_llm, extract_json
 
 log = logging.getLogger(__name__)
 
@@ -246,7 +246,7 @@ async def _generate_critique(failed_checks: list[str], content: dict) -> dict:
         response = await call_llm(
             "QA_COMPLIANCE_CRITIQUE", _CRITIQUE_SYSTEM, prompt, temperature=0.1,
         )
-        return json.loads(response.text)
+        return json.loads(extract_json(response.text))
     except Exception:
         return {
             "failed_checks": failed_checks,

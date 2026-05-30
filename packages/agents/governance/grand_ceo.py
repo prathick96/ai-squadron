@@ -25,7 +25,7 @@ from packages.schemas.events import (
     AgentID, EventType, VentureBriefPayload, make_event,
 )
 from packages.state.agent_state import AgentState, VentureBrief, append_event, update_stage
-from packages.tools.llm import call_llm
+from packages.tools.llm import call_llm, extract_json
 
 log = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
         response = await call_llm(
             "GRAND_CEO", _SYSTEM_PROMPT, user_prompt, temperature=0.30,
         )
-        brief_data: dict = json.loads(response.text)
+        brief_data: dict = json.loads(extract_json(response.text))
     except (json.JSONDecodeError, Exception) as exc:
         log.error("[CEO_NODE] LLM call failed: %s", exc)
         log_agent_event(run_id, venture_id, "GRAND_CEO", "FAILED", error_detail=str(exc))

@@ -18,7 +18,7 @@ import logging
 
 from packages.db.client import log_agent_event
 from packages.state.agent_state import AgentState, append_event, update_stage
-from packages.tools.llm import call_llm
+from packages.tools.llm import call_llm, extract_json
 
 log = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ async def media_growth_node(state: AgentState) -> AgentState:
 
     try:
         response = await call_llm("MEDIA_GROWTH", _SYSTEM_PROMPT, user_prompt, temperature=0.2)
-        report: dict = json.loads(response.text)
+        report: dict = json.loads(extract_json(response.text))
     except Exception as exc:
         log.error("[MEDIA_GROWTH_NODE] failed: %s", exc)
         log_agent_event(run_id, venture_id, "MEDIA_GROWTH", "FAILED", error_detail=str(exc))

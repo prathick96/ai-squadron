@@ -20,7 +20,7 @@ import logging
 
 from packages.db.client import log_agent_event
 from packages.state.agent_state import AgentState, append_event, update_stage
-from packages.tools.llm import call_llm
+from packages.tools.llm import call_llm, extract_json
 
 log = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ async def marketing_seo_node(state: AgentState) -> AgentState:
 
     try:
         response = await call_llm("MARKETING_SEO", _SYSTEM_PROMPT, user_prompt, temperature=0.5)
-        plan: dict = json.loads(response.text)
+        plan: dict = json.loads(extract_json(response.text))
     except Exception as exc:
         log.error("[MARKETING_SEO_NODE] failed: %s", exc)
         log_agent_event(run_id, venture_id, "MARKETING_SEO", "FAILED", error_detail=str(exc))
