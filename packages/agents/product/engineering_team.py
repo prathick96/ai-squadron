@@ -419,10 +419,9 @@ Venture type: {venture_type}
 TechSpec:
 {tech_spec}
 
-Remember the scaffold already provides: App.tsx, supabase.ts, SetupRequired.tsx, main.tsx.
+The scaffold already provides: App.tsx, supabase.ts, SetupRequired.tsx, main.tsx.
 Generate ONLY: src/types.ts, src/hooks/useData.ts, src/pages/Home.tsx
-
-{"files": [{"path": "src/types.ts", "content": "..."}, {"path": "src/hooks/useData.ts", "content": "..."}, {"path": "src/pages/Home.tsx", "content": "..."}]}
+Output JSON only — first character must be {{
 """
 
 _RETRY_TEMPLATE = """\
