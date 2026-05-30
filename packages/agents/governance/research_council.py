@@ -142,10 +142,23 @@ async def research_council_node(state: AgentState) -> AgentState:
     trend_json = json.dumps(trend_snapshot, indent=2)
 
     if kimi_available():
-        dossier_body, debate_transcript, token_total, latency_total = (
-            await _run_live_council(trend_json)
-        )
-        mode = "kimi_live"
+        try:
+            dossier_body, debate_transcript, token_total, latency_total = (
+                await _run_live_council(trend_json)
+            )
+            mode = "kimi_live"
+        except Exception as exc:
+            # OpenRouter / Kimi API error (5xx, quota, network) — never crash the pipeline.
+            # Fall back to mock dossier so CEO can still make a go/no-go decision.
+            log.warning(
+                "[RESEARCH_NODE] Kimi live council failed (%s) — falling back to mock dossier",
+                exc,
+            )
+            log_agent_event(run_id, venture_id, "RESEARCH_COUNCIL", "RUNNING",
+                            f"Kimi failed ({type(exc).__name__}) — using mock dossier")
+            dossier_body, debate_transcript = _mock_council_dossier(trend_snapshot)
+            token_total, latency_total = 0, 0
+            mode = "mock"
     else:
         log.warning("[RESEARCH_NODE] No Kimi key — using mock council dossier")
         dossier_body, debate_transcript = _mock_council_dossier(trend_snapshot)

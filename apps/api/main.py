@@ -273,8 +273,12 @@ def get_agents() -> dict:
 
 @app.get("/api/revenue")
 def get_revenue() -> dict:
-    payload, source = _revenue_payload()
-    return {**payload, "source": source}
+    try:
+        payload, source = _revenue_payload()
+        return {**payload, "source": source}
+    except Exception as exc:
+        log.warning("[API] /api/revenue failed (%s) — returning mock", exc)
+        return {**revenue_summary(), "source": "mock"}
 
 
 @app.get("/api/revenue/plan")
@@ -518,6 +522,17 @@ async def ws_live(websocket: WebSocket) -> None:
             await asyncio.sleep(5)
     except WebSocketDisconnect:
         log.debug("WebSocket client disconnected")
+
+
+# ---------------------------------------------------------------------------
+# Favicon — return empty icon to silence browser 404 noise
+# ---------------------------------------------------------------------------
+
+from fastapi.responses import Response  # noqa: E402
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    return Response(content=b"", media_type="image/x-icon")
 
 
 # ---------------------------------------------------------------------------
