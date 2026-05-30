@@ -140,6 +140,15 @@ export const api = {
     get<{ scorecards: Record<string, unknown>[]; count: number }>("/api/scorecards"),
   manualReview: () =>
     get<{ items: ManualReviewItem[]; count: number }>("/api/manual-review"),
+  resolveReview: (review_id: string, status: "APPROVED" | "REJECTED" | "DEFERRED", notes?: string) =>
+    fetch(`${API_BASE}/api/manual-review/${encodeURIComponent(review_id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status, notes: notes ?? "" }),
+    }).then(async (res) => {
+      if (!res.ok) throw new Error(`resolve failed: ${res.status}`);
+      return res.json() as Promise<{ ok: boolean; review_id: string; status: string }>;
+    }),
   runRevenueCycle: () => post<unknown>("/api/revenue/run-cycle", {}),
 
   // Week 8 — ledger read/write

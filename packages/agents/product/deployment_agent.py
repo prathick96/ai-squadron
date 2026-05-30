@@ -15,6 +15,7 @@ Optional: RAILWAY_PROJECT_ID  (targets a specific project instead of auto-managi
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,7 +28,7 @@ from packages.tools.railway_client import deploy_to_railway, railway_available
 
 log = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_BUILDS_ROOT = Path(os.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
 
 
 async def deployment_agent_node(state: AgentState) -> AgentState:
@@ -46,7 +47,7 @@ async def deployment_agent_node(state: AgentState) -> AgentState:
 
     use_railway    = railway_available()
     build_path     = build.get("build_path", "")
-    build_dir      = Path(build_path) if build_path else _REPO_ROOT / "builds" / venture_id
+    build_dir      = Path(build_path) if build_path else _BUILDS_ROOT / venture_id
     smoke_passed   = True
     deployment_url = f"https://{venture_id[:20]}.up.railway.app"
 

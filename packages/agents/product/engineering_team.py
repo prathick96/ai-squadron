@@ -25,6 +25,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -37,8 +38,10 @@ from packages.tools.llm import call_llm
 
 log = logging.getLogger(__name__)
 
-# Repo root: packages/agents/product/ → up 3 levels
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+# Builds go to /tmp so they're always writable regardless of where the app is deployed.
+# /app/ on Railway is a read-optimised overlay; /tmp/ is a writable tmpfs.
+# Use BUILDS_DIR env var to override (e.g. for local dev: BUILDS_DIR=./builds).
+_BUILDS_ROOT = Path(os.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
 
 # ---------------------------------------------------------------------------
 # Fixed scaffold — written on every initial build, never by the LLM
@@ -228,7 +231,7 @@ async def engineering_team_node(state: AgentState) -> AgentState:
     retry_count = state.get("qa_retry_count", 0)
     is_retry   = retry_count > 0
 
-    build_dir  = _REPO_ROOT / "builds" / venture_id
+    build_dir  = _BUILDS_ROOT / venture_id
     task = f"QA patch #{retry_count}" if is_retry else "Full build"
 
     log.info("[ENGINEERING_NODE] %s | venture=%s | dir=%s", task, venture_id, build_dir)
@@ -359,13 +362,22 @@ def _npm_executable() -> str:
 
 async def _run_npm_install(build_dir: Path, timeout: int = 300) -> tuple[int, str]:
     """
-    Run `npm install --prefer-offline` in build_dir.
+    Run `npm install` in build_dir.
     Returns (exit_code, stderr_tail).
+
+    Notes:
+      --no-audit / --no-fund   : skip network roundtrips for security audit + sponsor info
+      --cache /tmp/.npm        : explicit writable cache dir (/app/.npm may be read-only)
+      --legacy-peer-deps       : avoid peer-dep conflicts from auto-generated package.json
     """
     npm = _npm_executable()
+    npm_cache = str(_BUILDS_ROOT.parent / ".npm-cache")
     try:
         proc = await asyncio.create_subprocess_exec(
-            npm, "install", "--prefer-offline", "--no-audit", "--no-fund",
+            npm, "install",
+            "--no-audit", "--no-fund",
+            "--cache", npm_cache,
+            "--legacy-peer-deps",
             cwd=str(build_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

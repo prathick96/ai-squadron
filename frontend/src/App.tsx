@@ -675,13 +675,51 @@ export default function App() {
           {reviews.length > 0 && (
             <>
               <h2 style={{ marginTop: "1rem" }}>Manual review queue</h2>
+              <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: "0.5rem" }}>
+                Fix the root cause, then launch a new venture. Use Dismiss to clear stale items.
+              </p>
               {reviews.map((r) => (
                 <div
-                  key={r.venture_id + (r.created_at ?? "")}
-                  className="alert"
-                  style={{ borderColor: "var(--warn)" }}
+                  key={r.id ?? r.venture_id + (r.created_at ?? "")}
+                  style={{
+                    border: "1px solid #f84",
+                    borderRadius: 6,
+                    padding: "0.6rem 0.75rem",
+                    marginBottom: "0.5rem",
+                    background: "#1a1200",
+                  }}
                 >
-                  <strong>{r.venture_id}</strong> — {r.review_reason}
+                  <div style={{ fontSize: "0.78rem", fontFamily: "monospace", color: "#f84" }}>
+                    {r.artifact_type ?? "BUILD"} · {r.venture_id}
+                  </div>
+                  <div style={{ fontSize: "0.75rem", marginTop: 3, color: "#ddd" }}>
+                    {r.review_reason}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    {(["APPROVED", "REJECTED", "DEFERRED"] as const).map((action) => (
+                      <button
+                        key={action}
+                        style={{
+                          fontSize: "0.68rem",
+                          padding: "2px 8px",
+                          borderRadius: 4,
+                          border: "1px solid #444",
+                          background: action === "APPROVED" ? "#1a3a1a" : action === "REJECTED" ? "#3a1a1a" : "#222",
+                          color: action === "APPROVED" ? "#4c4" : action === "REJECTED" ? "#f44" : "#aaa",
+                          cursor: "pointer",
+                          fontFamily: "monospace",
+                        }}
+                        onClick={() => {
+                          if (!r.id) return;
+                          api.resolveReview(r.id, action)
+                            .then(() => refresh())
+                            .catch((e) => console.error("resolve failed", e));
+                        }}
+                      >
+                        {action === "APPROVED" ? "✓ Approve" : action === "REJECTED" ? "✗ Reject" : "— Dismiss"}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ))}
             </>
