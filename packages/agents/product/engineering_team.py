@@ -183,18 +183,21 @@ You generate React 19 + TypeScript source files for a SaaS MVP.
 The scaffold (package.json, vite.config.ts, tsconfig, index.html, src/main.tsx) \
 is already written — do NOT regenerate those.
 
-Generate ONLY these application-specific source files (keep each file SHORT):
-  src/App.tsx           — routing shell with react-router-dom (max 60 lines)
+Generate ONLY these 5 source files (keep each SHORT — max 60 lines each):
+  src/App.tsx           — routing shell with react-router-dom
   src/types.ts          — shared TypeScript interfaces only
   src/lib/supabase.ts   — Supabase client init only
-  src/pages/Home.tsx    — one main page (max 80 lines)
+  src/pages/Home.tsx    — one main page
   src/hooks/useData.ts  — one TanStack Query hook
 
-Rules:
-  - No placeholders or TODOs
-  - All env vars via import.meta.env.VITE_* (never hardcoded)
-  - No imports from packages not in the scaffold's package.json
-  - Keep files minimal — we can expand later
+ALLOWED IMPORTS (already in package.json — use ONLY these):
+  react, react-dom, react-router-dom
+  @tanstack/react-query
+  @supabase/supabase-js
+  posthog-js
+
+NEVER import anything else. If you need a utility, write it inline.
+Use import.meta.env.VITE_* for all config values.
 
 CRITICAL OUTPUT RULE:
   Your ENTIRE response must be ONLY the JSON object below.
@@ -348,6 +351,50 @@ _SCAFFOLD_DEPS = [
 ]
 
 
+_ALLOWED_IMPORT_PREFIXES = (
+    # React / routing
+    "react", "react-dom", "react-router-dom",
+    # Data fetching
+    "@tanstack/react-query",
+    # Supabase
+    "@supabase/supabase-js",
+    # Analytics (injected by scaffold)
+    "posthog-js",
+    # Built-in TypeScript/Node — always fine
+    "node:", "./", "../", "/", "@/",
+)
+
+
+def _sanitise_llm_files(llm_files: list[dict]) -> list[dict]:
+    """
+    Strip files that import packages not in the scaffold's package.json.
+    This prevents vite build failures caused by the LLM hallucinating
+    library names (e.g. 'import { toast } from "sonner"').
+
+    Files with unknown imports are replaced with a safe stub so the rest
+    of the app can still compile and the QA retry can patch just that file.
+    """
+    import re
+    import_re = re.compile(r"""(?:^|\n)\s*import\s+.*?\s+from\s+['"]([^'"]+)['"]""")
+
+    sanitised = []
+    for f in llm_files:
+        path    = f.get("path", "")
+        content = f.get("content", "")
+        unknown = []
+        for pkg in import_re.findall(content):
+            if not any(pkg.startswith(p) for p in _ALLOWED_IMPORT_PREFIXES):
+                unknown.append(pkg)
+        if unknown:
+            log.warning("[ENGINEERING_NODE] Stripping %s — unknown imports: %s", path, unknown)
+            stub = f"// AUTO-STUB: unknown imports {unknown} removed\n"
+            stub += "export default function Placeholder() { return null; }\n"
+            sanitised.append({"path": path, "content": stub})
+        else:
+            sanitised.append(f)
+    return sanitised
+
+
 def _write_files(build_dir: Path, llm_files: list[dict], *, is_retry: bool) -> None:
     """Write scaffold + LLM files to build_dir."""
     build_dir.mkdir(parents=True, exist_ok=True)
@@ -359,7 +406,7 @@ def _write_files(build_dir: Path, llm_files: list[dict], *, is_retry: bool) -> N
             dest.write_text(content, encoding="utf-8")
         log.debug("[ENGINEERING_NODE] Scaffold written (%d files)", len(_SCAFFOLD))
 
-    for f in llm_files:
+    for f in _sanitise_llm_files(llm_files):
         rel = f.get("path", "").lstrip("/")
         if not rel:
             continue

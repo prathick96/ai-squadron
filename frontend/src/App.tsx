@@ -264,6 +264,40 @@ function ActiveRunCard({ run, onRefresh }: { run: PipelineRun; onRefresh: () => 
           ))}
         </div>
       )}
+
+      {/* Build actions — shown for PRODUCT runs that completed or have build artifacts */}
+      {run.department === "PRODUCT" && (run.status === "COMPLETED" || run.status === "MANUAL_REVIEW") && (
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          <a
+            href={`/api/builds/${run.venture_id}`}
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              fontSize: "0.7rem", padding: "3px 10px", borderRadius: 4,
+              border: "1px solid #336", background: "#0a0a1a", color: "#88f",
+              textDecoration: "none", fontFamily: "monospace",
+            }}
+          >
+            📁 View Build Files
+          </a>
+          <a
+            href={`/api/builds/${run.venture_id}/download`}
+            style={{
+              fontSize: "0.7rem", padding: "3px 10px", borderRadius: 4,
+              border: "1px solid #336", background: "#0a0a1a", color: "#88f",
+              textDecoration: "none", fontFamily: "monospace",
+            }}
+          >
+            ⬇ Download ZIP
+          </a>
+          <span style={{
+            fontSize: "0.65rem", color: "var(--muted)", alignSelf: "center",
+            fontFamily: "monospace",
+          }}>
+            Local: cd builds/{run.venture_id} &amp;&amp; npm install &amp;&amp; npm run dev
+          </span>
+        </div>
+      )}
     </div>
   );
 }

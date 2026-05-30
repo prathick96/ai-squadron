@@ -394,6 +394,117 @@ def kill_venture_endpoint(venture_id: str) -> dict:
     return {"ok": True, "venture_id": venture_id, "status": "KILLED"}
 
 
+# ---------------------------------------------------------------------------
+# Build inspection — see and download generated SaaS code
+# ---------------------------------------------------------------------------
+
+@app.get("/api/builds/{venture_id}")
+def get_build_files(venture_id: str) -> dict:
+    """
+    List all generated files for a SaaS venture with metadata.
+    Files live at BUILDS_DIR/{venture_id}/ (default /tmp/squadron-builds/).
+    Each entry has path, size_bytes, and a 300-char preview.
+    node_modules and dist/ are excluded from the listing.
+    """
+    import os as _bos
+    from pathlib import Path as _P
+    builds_root = _P(_bos.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
+    build_dir   = builds_root / venture_id
+
+    if not build_dir.is_dir():
+        raise HTTPException(404, f"No build found for {venture_id}. "
+                                 "Run a PRODUCT pipeline first.")
+
+    files = []
+    total_bytes = 0
+    for f in sorted(build_dir.rglob("*")):
+        if not f.is_file():
+            continue
+        if "node_modules" in f.parts or ".git" in f.parts or "dist" in f.parts:
+            continue
+        rel  = f.relative_to(build_dir).as_posix()
+        size = f.stat().st_size
+        total_bytes += size
+        try:
+            preview = f.read_text(encoding="utf-8", errors="replace")[:300]
+        except Exception:
+            preview = ""
+        files.append({"path": rel, "size_bytes": size, "preview": preview})
+
+    dist_dir = build_dir / "dist"
+    dist_kb  = 0
+    if dist_dir.is_dir():
+        dist_kb = round(sum(f.stat().st_size for f in dist_dir.rglob("*") if f.is_file()) / 1024, 1)
+
+    return {
+        "venture_id":  venture_id,
+        "build_dir":   str(build_dir),
+        "file_count":  len(files),
+        "total_kb":    round(total_bytes / 1024, 1),
+        "dist_exists": dist_dir.is_dir(),
+        "dist_kb":     dist_kb,
+        "validate": {
+            "local_dev":    f"cd {build_dir} && npm install && npm run dev",
+            "local_build":  f"cd {build_dir} && npm run build",
+            "preview_url":  "http://localhost:5173  (after npm run dev)",
+        },
+        "files": files,
+    }
+
+
+@app.get("/api/builds/{venture_id}/file")
+def get_build_file(venture_id: str, path: str) -> dict:
+    """Full content of a single generated file. ?path=src/App.tsx"""
+    import os as _bos
+    from pathlib import Path as _P
+    builds_root = _P(_bos.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
+    target = (builds_root / venture_id / path).resolve()
+    guard  = (builds_root / venture_id).resolve()
+
+    if not str(target).startswith(str(guard)):
+        raise HTTPException(400, "Invalid path — directory traversal blocked")
+    if "node_modules" in target.parts:
+        raise HTTPException(400, "node_modules not served")
+    if not target.is_file():
+        raise HTTPException(404, f"File not found: {path}")
+
+    content = target.read_text(encoding="utf-8", errors="replace")
+    return {"venture_id": venture_id, "path": path,
+            "size_bytes": target.stat().st_size, "content": content}
+
+
+@app.get("/api/builds/{venture_id}/download")
+def download_build(venture_id: str):
+    """Download all source files (no node_modules) as a ZIP."""
+    import io
+    import os as _bos
+    import zipfile
+    from pathlib import Path as _P
+    from fastapi.responses import StreamingResponse
+
+    builds_root = _P(_bos.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
+    build_dir   = builds_root / venture_id
+
+    if not build_dir.is_dir():
+        raise HTTPException(404, f"No build found for {venture_id}")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(build_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            if "node_modules" in f.parts or ".git" in f.parts:
+                continue
+            zf.write(f, arcname=f.relative_to(build_dir))
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{venture_id}.zip"'},
+    )
+
+
 @app.get("/api/portfolio")
 def get_portfolio() -> dict:
     live_data = _portfolio_from_supabase()

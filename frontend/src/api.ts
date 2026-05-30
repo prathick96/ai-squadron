@@ -172,6 +172,18 @@ export const api = {
       },
     ),
 
+  // Week 10 — build inspection
+  buildFiles: (venture_id: string) =>
+    get<{
+      venture_id: string; build_dir: string; file_count: number;
+      total_kb: number; dist_exists: boolean; dist_kb: number;
+      validate: Record<string, string>; files: { path: string; size_bytes: number; preview: string }[];
+    }>(`/api/builds/${encodeURIComponent(venture_id)}`),
+  buildFile: (venture_id: string, path: string) =>
+    get<{ venture_id: string; path: string; size_bytes: number; content: string }>(
+      `/api/builds/${encodeURIComponent(venture_id)}/file?path=${encodeURIComponent(path)}`
+    ),
+
   // Week 5 — pipeline control
   pipelineRun: (department: "PRODUCT" | "MEDIA" | "AUTO" = "AUTO", venture_id?: string) =>
     post<{ run_id: string; venture_id: string; status: string }>("/api/pipeline/run", {

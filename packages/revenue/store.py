@@ -243,12 +243,14 @@ def resolve_manual_review(review_id: str, status: str, notes: str = "") -> bool:
                 return True
         return False
     db = __import__("packages.db.client", fromlist=["get_db"]).get_db()
-    db.table("manual_review_queue").update({
+    result = db.table("manual_review_queue").update({
         "status": status,
         "notes": notes,
         "resolved_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", review_id).execute()
-    return True
+    # Return True only when a row was actually updated.
+    # Supabase returns result.data as a list of updated rows (empty if no match).
+    return bool(getattr(result, "data", None))
 
 
 def log_sync_run(source: str, status: str, rows: int, error: str | None = None) -> None:
