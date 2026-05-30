@@ -556,21 +556,16 @@ class ManualReviewPayload(BaseModel):
 
 class ProductVPBriefPayload(BaseModel):
     venture_id: str
-    venture_type: Literal["MICRO_SAAS", "AFFILIATE_SITE"]
-    niche: str
-    target_audience: str
-    build_priority: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM"
-    token_budget: int = 50_000
+    department: str = "PRODUCT"
+    strategy_memo: dict = {}
+    approved_budget_usd: float = 500.0
 
 
 class MediaVPBriefPayload(BaseModel):
     venture_id: str
-    venture_type: Literal["MEDIA_CHANNEL"]
-    niche: str
-    target_audience: str
-    platform: Literal["youtube", "tiktok", "instagram"] = "youtube"
-    content_angles: list[str] = []
-    upload_frequency: str = "daily"
+    department: str = "MEDIA"
+    strategy_memo: dict = {}
+    approved_budget_usd: float = 200.0
 
 
 # ---------------------------------------------------------------------------
