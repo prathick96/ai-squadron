@@ -115,7 +115,7 @@ def _tech_spec_data():
             user_story="As a freelancer I upload my bank statement",
             acceptance_criteria=["Parses CSV", "Categorises expenses"],
             estimated_components=["FileUpload", "CSVParser"],
-        )],
+        ).model_dump()],
         data_models={"User": {"id": "uuid", "email": "string"}},
         api_routes=[{"method": "POST", "path": "/api/upload", "description": "Upload statement"}],
         estimated_build_tokens=180000,
@@ -214,7 +214,7 @@ def test_qa_failed_payload():
             component="CSVParser",
             error_type="RUNTIME_EXCEPTION",
             fix_directive="Add null guard before map call",
-        )],
+        ).model_dump()],
     )
     payload = QAFailedPayload(
         venture_id="ven_001",
