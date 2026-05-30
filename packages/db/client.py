@@ -101,7 +101,22 @@ class _NullResult:
 
 def upsert_venture(venture_data: dict[str, Any]) -> None:
     db = get_db()
-    db.table("ventures").upsert(venture_data).execute()
+    try:
+        # on_conflict="venture_id" so Supabase uses the UNIQUE constraint
+        # (not the UUID primary key) as the conflict target.
+        db.table("ventures").upsert(venture_data, on_conflict="venture_id").execute()
+    except TypeError:
+        # Older supabase-py client doesn't support on_conflict kwarg — fall back.
+        db.table("ventures").upsert(venture_data).execute()
+    except Exception as exc:
+        # Duplicate key on retry or CEO re-using same niche name — do an UPDATE instead.
+        if "23505" in str(exc) or "duplicate key" in str(exc).lower():
+            vid = venture_data.get("venture_id", "")
+            if vid:
+                update = {k: v for k, v in venture_data.items() if k != "venture_id"}
+                db.table("ventures").update(update).eq("venture_id", vid).execute()
+        else:
+            raise
 
 
 _TERMINAL_STATUSES = {"SUCCESS", "FAILED", "COMPLETED", "SKIPPED"}
