@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -556,6 +556,97 @@ def download_build(venture_id: str):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{venture_id}.zip"'},
     )
+
+
+@app.post("/api/webhooks/paddle")
+async def paddle_webhook(request: Request) -> dict:
+    """
+    Paddle webhook handler — updates user_subscriptions when Paddle fires events.
+    Events handled: subscription.created, subscription.updated, subscription.cancelled.
+
+    Set in Paddle Dashboard → Notifications → add endpoint:
+      https://ai-squadron-production.up.railway.app/api/webhooks/paddle
+    """
+    import json as _json
+    import hmac
+    import hashlib
+
+    body = await request.body()
+    paddle_sig = request.headers.get("Paddle-Signature", "")
+    secret     = os.getenv("PADDLE_WEBHOOK_SECRET", "")
+
+    # Verify signature when secret is set
+    if secret and paddle_sig:
+        ts_part, h1_part = "", ""
+        for part in paddle_sig.split(";"):
+            if part.startswith("ts="):
+                ts_part = part[3:]
+            elif part.startswith("h1="):
+                h1_part = part[3:]
+        signed  = f"{ts_part}:{body.decode()}"
+        expected = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, h1_part):
+            raise HTTPException(401, "Invalid Paddle signature")
+
+    try:
+        payload  = _json.loads(body)
+        evt_type = payload.get("event_type", "")
+        data     = payload.get("data", {})
+
+        if evt_type in ("subscription.created", "subscription.updated"):
+            _upsert_subscription(data)
+        elif evt_type == "subscription.cancelled":
+            _cancel_subscription(data)
+
+        return {"ok": True, "event_type": evt_type}
+    except Exception as exc:
+        log.exception("[WEBHOOK] Paddle webhook error: %s", exc)
+        raise HTTPException(500, str(exc))
+
+
+def _upsert_subscription(data: dict) -> None:
+    from packages.db.client import get_db, is_supabase_connected
+    if not is_supabase_connected():
+        return
+    db = get_db()
+    custom = data.get("custom_data") or {}
+    user_id = custom.get("user_id")  # set this when creating Paddle checkout
+    if not user_id:
+        return
+    plan = custom.get("plan", "builder")
+    items = data.get("items", [])
+    price_id = items[0]["price"]["id"] if items else None
+    billing   = (items[0].get("price", {}).get("billing_cycle", {}).get("interval", "month")) if items else "month"
+    try:
+        db.table("user_subscriptions").upsert({
+            "user_id":               user_id,
+            "paddle_subscription_id": data.get("id"),
+            "paddle_customer_id":    data.get("customer_id"),
+            "plan":                  plan,
+            "status":                data.get("status", "active"),
+            "price_id":              price_id,
+            "billing_interval":      billing,
+            "current_period_end":    data.get("current_billing_period", {}).get("ends_at"),
+            "cancel_at_period_end":  data.get("scheduled_change", {}).get("action") == "cancel",
+        }, on_conflict="paddle_subscription_id").execute()
+        # Update the user's plan in their profile
+        db.table("user_profiles").update({"plan": plan}).eq("id", user_id).execute()
+    except Exception as exc:
+        log.warning("[WEBHOOK] upsert_subscription failed: %s", exc)
+
+
+def _cancel_subscription(data: dict) -> None:
+    from packages.db.client import get_db, is_supabase_connected
+    if not is_supabase_connected():
+        return
+    db = get_db()
+    try:
+        db.table("user_subscriptions").update({
+            "status": "cancelled",
+            "cancel_at_period_end": True,
+        }).eq("paddle_subscription_id", data.get("id")).execute()
+    except Exception as exc:
+        log.warning("[WEBHOOK] cancel_subscription failed: %s", exc)
 
 
 @app.get("/api/products")

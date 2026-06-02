@@ -14,12 +14,13 @@ import Navbar                    from './components/Navbar'
 import Footer                    from './components/Footer'
 
 // Public pages (lazy imports keep initial bundle small)
-import Landing  from './pages/Landing'
-import Pricing  from './pages/Pricing'
-import Auth     from './pages/Auth'
-import Terms    from './pages/legal/Terms'
-import Privacy  from './pages/legal/Privacy'
-import Refund   from './pages/legal/Refund'
+import Landing      from './pages/Landing'
+import Pricing      from './pages/Pricing'
+import Auth         from './pages/Auth'
+import Onboarding   from './pages/Onboarding'
+import Terms        from './pages/legal/Terms'
+import Privacy      from './pages/legal/Privacy'
+import Refund       from './pages/legal/Refund'
 
 // Admin dashboard (loaded only when admin navigates there)
 import CommandCenter from './pages/CommandCenter'
@@ -85,7 +86,8 @@ export default function App() {
         <Route path="/products" element={<PublicLayout><Products /></PublicLayout>} />
         <Route path="/pricing"  element={<PublicLayout><Pricing /></PublicLayout>} />
         <Route path="/auth"     element={<Auth />} />
-        <Route path="/dashboard" element={<PublicLayout><UserDashboard /></PublicLayout>} />
+        <Route path="/dashboard"   element={<PublicLayout><UserDashboard /></PublicLayout>} />
+        <Route path="/onboarding" element={<Onboarding />} />
 
         {/* Legal pages */}
         <Route path="/legal/terms"   element={<Legal><Terms /></Legal>} />

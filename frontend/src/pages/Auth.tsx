@@ -40,11 +40,17 @@ export default function Auth() {
       } else {
         const { data, error: err } = await supabase.auth.signInWithPassword({ email, password })
         if (err) throw err
-        // Admin → Command Center, users → dashboard
+        // Admin → Command Center; new users → onboarding; returning users → dashboard
         if (data.user?.email === ADMIN_EMAIL) {
           navigate('/command-center', { replace: true })
         } else {
-          navigate('/dashboard', { replace: true })
+          // Check if user has completed onboarding
+          const { data: profile } = await supabase.from('user_profiles').select('onboarding_done').eq('id', data.user!.id).single()
+          if (profile?.onboarding_done) {
+            navigate('/dashboard', { replace: true })
+          } else {
+            navigate('/onboarding', { replace: true })
+          }
         }
       }
     } catch (err: unknown) {
