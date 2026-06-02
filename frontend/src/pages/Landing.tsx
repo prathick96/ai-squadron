@@ -39,9 +39,9 @@ const FEATURES = [
   { icon: '🎬', title: 'Product + Media', desc: 'Both SaaS (React + FastAPI) and faceless media channels (YouTube, TikTok) in one pipeline.' },
 ]
 
-import { type FC } from 'react'
 
-const Landing: FC = () => {
+
+export default function Landing() {
   const { data: productsData } = useQuery({
     queryKey: ['products'],
     queryFn: () => api.products?.() ?? Promise.resolve({ products: [], count: 0 }),
@@ -216,4 +216,4 @@ function ProductCard({ name, desc, category, price, status }: {
   )
 }
 
-export default Landing
+

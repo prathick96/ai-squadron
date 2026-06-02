@@ -8,7 +8,7 @@ import {
   type PortfolioSlot,
   type RevenueSummary,
   type Venture,
-} from "./api";
+} from "../api";
 
 function formatUsd(n: number) {
   return new Intl.NumberFormat("en-US", {
