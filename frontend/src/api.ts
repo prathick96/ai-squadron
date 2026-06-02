@@ -172,6 +172,12 @@ export const api = {
       },
     ),
 
+  // Public storefront
+  products: () =>
+    get<{ products: { venture_id: string; niche: string; status: string; venture_type: string }[]; count: number }>(
+      '/api/products',
+    ),
+
   // Week 10 — build inspection
   buildFiles: (venture_id: string) =>
     get<{

@@ -558,6 +558,25 @@ def download_build(venture_id: str):
     )
 
 
+@app.get("/api/products")
+def get_products() -> dict:
+    """
+    Public storefront API — returns ventures suitable for display as products.
+    Filters: go_decision=True, status NOT KILLED, niche not 'pending'.
+    Used by the public landing page and /products route.
+    """
+    from packages.revenue.store import list_ventures
+    all_ventures = list_ventures()
+    products = [
+        v for v in all_ventures
+        if v.get("go_decision") and v.get("status") != "KILLED" and v.get("niche", "pending") != "pending"
+    ]
+    # Sort: LIVE first, then SCALING, then others
+    order = {"LIVE": 0, "SCALING": 1, "DEVELOPMENT": 2, "QA": 3, "IDEATION": 4}
+    products.sort(key=lambda v: order.get(v.get("status", ""), 9))
+    return {"products": products, "count": len(products)}
+
+
 @app.get("/api/portfolio")
 def get_portfolio() -> dict:
     live_data = _portfolio_from_supabase()
