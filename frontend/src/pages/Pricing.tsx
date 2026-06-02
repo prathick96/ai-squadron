@@ -1,78 +1,94 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
+// ─── Chairman's Council recommendation ────────────────────────────────────────
+// Price by portfolio size (active ventures), NOT by pipeline type.
+// Customers choose SaaS vs Media vs Affiliate at *run time*, not *purchase time*.
+// Run credits can be spent on ANY venture type — no split tiers, no confusion.
+// ──────────────────────────────────────────────────────────────────────────────
+
 const TIERS = [
   {
     name: 'Starter',
+    tagline: 'Taste it',
     monthly: 0,
     annual: 0,
-    desc: 'Explore the platform and build your first venture at no cost.',
+    desc: 'One venture, one run. No credit card. No commitment. See what AI builds.',
     highlight: false,
     paddleMonthlyId: '',
     paddleAnnualId: '',
     features: [
-      '1 pipeline run per month',
       '1 active venture',
-      'Product pipeline only',
-      'Mock research (no live niche data)',
+      '1 pipeline run per month',
+      'SaaS or Media — your choice',
+      'Build inspection & ZIP download',
       'Community support',
-      'Build inspection & download',
     ],
-    cta: 'Start free',
+    cta: 'Start free →',
     ctaLink: '/auth?mode=signup',
   },
   {
     name: 'Builder',
+    tagline: 'Run it',
     monthly: 49,
     annual: 39,
-    desc: 'For solo founders shipping their first real product or channel.',
+    desc: 'Run multiple ventures simultaneously. Spend credits on SaaS, Media, or Affiliate — any mix you want.',
     highlight: true,
     paddleMonthlyId: import.meta.env.VITE_PADDLE_BUILDER_MONTHLY ?? '',
     paddleAnnualId:  import.meta.env.VITE_PADDLE_BUILDER_ANNUAL  ?? '',
     features: [
-      '10 pipeline runs per month',
       '5 active ventures',
-      'Product + Media pipelines',
+      '10 pipeline runs / month (any type)',
+      'SaaS apps + Media channels + Affiliate sites',
       'Live niche research (Kimi + Tavily)',
       'ElevenLabs voice generation',
-      'Real Railway deployment',
+      'Real Railway deployments (live HTTPS URLs)',
       'Priority email support',
       '14-day money-back guarantee',
     ],
-    cta: 'Start building',
+    cta: 'Start building →',
     ctaLink: '/auth?mode=signup&plan=builder',
   },
   {
     name: 'Studio',
+    tagline: 'Scale it',
     monthly: 149,
     annual: 119,
-    desc: 'Unlimited ventures, full API integrations, and white-glove onboarding.',
+    desc: 'Unlimited portfolio. Build and run as many ventures as you want, across every pipeline type.',
     highlight: false,
     paddleMonthlyId: import.meta.env.VITE_PADDLE_STUDIO_MONTHLY ?? '',
     paddleAnnualId:  import.meta.env.VITE_PADDLE_STUDIO_ANNUAL  ?? '',
     features: [
       'Unlimited pipeline runs',
       'Unlimited ventures',
-      'Product + Media pipelines',
-      'YouTube + TikTok publishing',
-      'Stripe / Paddle revenue sync',
-      'PostHog analytics per product',
-      'Custom niche briefs',
-      'Dedicated Slack channel',
+      'Unlimited active ventures',
+      'Unlimited pipeline runs (SaaS + Media + Affiliate)',
+      'YouTube + TikTok auto-publishing',
+      'Paddle / Stripe revenue sync',
+      'PostHog analytics on every product',
+      'Custom niche research briefs',
+      'Dedicated Slack support channel',
       '14-day money-back guarantee',
     ],
-    cta: 'Go Studio',
+    cta: 'Go Studio →',
     ctaLink: '/auth?mode=signup&plan=studio',
   },
 ]
 
+// Tip block shown below the tiers
+const PIPELINE_NOTE = {
+  heading: 'One plan. Every venture type.',
+  body: 'You choose what to build at run time — SaaS app, YouTube channel, or affiliate site. Your monthly runs work across all three. No locked tiers. No up-charges for switching.',
+}
+
 const FAQ = [
-  { q: 'Do I need a credit card to start?', a: 'No. Starter is completely free with no card required. You only enter payment details when upgrading.' },
-  { q: 'Who processes payments?', a: 'All payments are processed by Paddle, our Merchant of Record. Paddle handles global tax (VAT, GST, US sales tax) automatically — you receive clean revenue.' },
+  { q: 'Do I need a credit card to start?', a: 'No. Starter is completely free with no card required. You only enter payment details when upgrading to Builder or Studio.' },
+  { q: 'Can I build a YouTube channel AND a SaaS on the same plan?', a: 'Yes. Builder and Studio plan runs work across every venture type — SaaS apps, Media channels, and Affiliate sites. You choose at run time, not at purchase.' },
+  { q: 'Who processes payments?', a: 'All payments are processed by Paddle, our Merchant of Record. Paddle handles global tax (VAT, GST, US sales tax) automatically — you receive clean USD revenue. Works from India without a US entity.' },
   { q: 'What is the refund policy?', a: 'We offer a 14-day full refund on all paid plans, no questions asked. See our Refund Policy for details.' },
-  { q: 'Can I cancel anytime?', a: 'Yes. Cancel from your dashboard at any time. Your plan remains active until the end of the billing period.' },
-  { q: 'What APIs do I need to provide?', a: 'For the full experience: ElevenLabs (voice), Railway (deploy), YouTube OAuth (publish), Supabase (database). Starter works without any external APIs.' },
-  { q: 'Is my data safe?', a: 'Your data is stored in Supabase (ISO 27001 certified). We never sell or share personal data. See our Privacy Policy.' },
+  { q: 'Can I cancel anytime?', a: 'Yes. Cancel from your dashboard at any time. Your plan stays active until the end of the billing period — no partial refunds after 14 days.' },
+  { q: 'What APIs do I need?', a: 'Starter: nothing — works out of the box. Builder: ElevenLabs (voice) + Railway (deploy) for full features. Studio: all of the above + YouTube OAuth for publishing.' },
+  { q: 'Is my data safe?', a: 'Your data is stored in Supabase (ISO 27001 certified). We never sell or share personal data. Row-Level Security ensures you only see your own ventures.' },
 ]
 
 export default function Pricing() {
@@ -137,7 +153,10 @@ export default function Pricing() {
                   }}>MOST POPULAR</div>
                 )}
 
-                <div style={{ fontWeight: 800, fontSize: 20, color: '#f1f5f9', marginBottom: 6 }}>{tier.name}</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 4 }}>
+                  <div style={{ fontWeight: 800, fontSize: 20, color: '#f1f5f9' }}>{tier.name}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{(tier as {tagline?: string}).tagline}</div>
+                </div>
                 <p style={{ color: '#64748b', fontSize: 13, lineHeight: 1.6, marginBottom: 24 }}>{tier.desc}</p>
 
                 <div style={{ marginBottom: 28 }}>
@@ -176,6 +195,15 @@ export default function Pricing() {
               </div>
             )
           })}
+        </div>
+
+        {/* Pipeline note — Chairman's recommendation: no split by type */}
+        <div style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.1),rgba(62,207,142,0.06))', border: '1px solid #3b1d8a', borderRadius: 12, padding: '24px 28px', marginBottom: 24, display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+          <span style={{ fontSize: 24, flexShrink: 0 }}>⚡</span>
+          <div>
+            <div style={{ fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>{PIPELINE_NOTE.heading}</div>
+            <div style={{ color: '#64748b', fontSize: 14, lineHeight: 1.7 }}>{PIPELINE_NOTE.body}</div>
+          </div>
         </div>
 
         {/* Paddle trust badge */}
