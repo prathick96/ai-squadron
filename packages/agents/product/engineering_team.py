@@ -70,6 +70,7 @@ _SCAFFOLD: dict[str, str] = {
         "dependencies": {
             "@supabase/supabase-js": "^2.45.0",
             "@tanstack/react-query": "^5.59.0",
+            "@paddle/paddle-js":     "^1.2.0",
             "posthog-js":            "^1.182.0",
             "react":                 "^19.0.0",
             "react-dom":             "^19.0.0",
