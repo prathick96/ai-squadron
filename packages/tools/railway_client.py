@@ -4,17 +4,19 @@ Railway REST + GraphQL API client for programmatic SaaS deployments.
 
 Deployment flow
 ---------------
-1. Get or create one Railway project for the whole AI Squadron org
-   (uses RAILWAY_PROJECT_ID if set, otherwise finds/creates "ai-squadron")
-2. Get or create a service per venture_id inside that project
-3. Pack build_dir into a .tar.gz (node_modules excluded)
-4. POST tarball to Railway's upload endpoint → uploadId
-5. GraphQL deploymentCreate(serviceId, environmentId, uploadId)
-6. Poll deployment.status until SUCCESS or terminal failure
-7. Return the live HTTPS URL
+1. Validate token with a `me` query first (fast auth check)
+2. Get or create one Railway project ("ai-squadron") per org
+3. Get or create a service per venture_id inside that project
+4. Pack build_dir into a .tar.gz (node_modules / dist excluded)
+5. POST tarball to Railway's upload endpoint → uploadId
+6. GraphQL deploymentCreate(serviceId, environmentId, uploadId)
+7. Poll deployment.status until SUCCESS or terminal failure
+8. Return the live HTTPS URL
 
-Required env var: RAILWAY_TOKEN
+Required env var: RAILWAY_TOKEN  OR  RAILWAY_API_TOKEN
 Optional env var: RAILWAY_PROJECT_ID  (if omitted, project is auto-managed)
+
+Schema: Railway Backboard GraphQL v2 (2025 — edges/node connection style)
 """
 from __future__ import annotations
 
@@ -38,8 +40,7 @@ _UPLOAD_URL    = "https://backboard.railway.app/deployments/uploads"
 _POLL_INTERVAL = 5    # seconds between status checks
 _DEPLOY_TIMEOUT = 300  # 5 minutes max
 
-# Directories excluded from the deployment tarball
-_EXCLUDE_DIRS = {"node_modules", ".git", ".cache", "dist", "__pycache__"}
+_EXCLUDE_DIRS = {"node_modules", ".git", ".cache", "__pycache__"}
 
 
 # ---------------------------------------------------------------------------
@@ -60,61 +61,62 @@ def railway_available() -> bool:
 async def deploy_to_railway(venture_id: str, build_dir: Path) -> str:
     """
     Deploy a Vite build directory to Railway.
-
     Returns the live HTTPS URL on success.
     Raises RuntimeError if the deployment fails or times out.
     """
-    token        = _token()
-    project_name = "ai-squadron"
+    token        = _get_railway_token()
     service_name = venture_id[:30]
 
-    async with httpx.AsyncClient(timeout=30.0, verify=_ssl_verify()) as client:
-        # Railway auto-injects RAILWAY_PROJECT_ID and RAILWAY_ENVIRONMENT_ID for
-        # every running service.  Use them directly to skip the GetProject GQL
-        # call — that call fails with 400 when the token is a project-scoped
-        # deploy key rather than a full Personal Access Token (PAT).
-        injected_project = os.getenv("RAILWAY_PROJECT_ID", "")
-        injected_env     = (
-            os.getenv("RAILWAY_ENVIRONMENT_ID", "")
-            or os.getenv("RAILWAY_ENVIRONMENT", "")
-        )
+    async with httpx.AsyncClient(timeout=45.0, verify=_ssl_verify()) as client:
+        # 1. Validate token
+        await _validate_token(client, token)
 
-        if injected_project and injected_env:
-            project_id = injected_project
-            env_id     = injected_env
-            log.info("[RAILWAY] Using injected ids project=%s env=%s",
-                     project_id[:8], env_id[:8])
-        else:
-            project_id, env_id = await _get_or_create_project(client, token, project_name)
+        # 2. Project
+        project_id, env_id = await _get_or_create_project(client, token, "ai-squadron")
+        log.info("[RAILWAY] project=%s env=%s", project_id[:8], env_id[:8])
 
+        # 3. Service
         service_id = await _get_or_create_service(client, token, project_id, service_name)
-        log.info("[RAILWAY] project=%s service=%s env=%s",
-                 project_id[:8], service_id[:8], env_id[:8])
+        log.info("[RAILWAY] service=%s (%s)", service_id[:8], service_name)
 
-        tarball     = _make_tarball(build_dir)
-        log.info("[RAILWAY] Tarball ready | size=%.1f KB", len(tarball) / 1024)
+        # 4. Tarball
+        tarball   = _make_tarball(build_dir)
+        log.info("[RAILWAY] Tarball size=%.1f KB", len(tarball) / 1024)
 
-        upload_id   = await _upload_tarball(client, token, tarball)
-        log.info("[RAILWAY] Upload complete | uploadId=%s", upload_id[:8])
+        # 5. Upload
+        upload_id = await _upload_tarball(client, token, tarball)
+        log.info("[RAILWAY] Uploaded → uploadId=%s", upload_id[:8])
 
-        deploy_id   = await _create_deployment(client, token, service_id, env_id, upload_id)
-        log.info("[RAILWAY] Deployment queued | deploymentId=%s", deploy_id[:8])
+        # 6. Deploy
+        deploy_id = await _create_deployment(client, token, service_id, env_id, upload_id)
+        log.info("[RAILWAY] Deployment queued → deploymentId=%s", deploy_id[:8])
 
-        url         = await _poll_deployment(client, token, deploy_id)
+        # 7. Poll
+        url = await _poll_deployment(client, token, deploy_id)
         return url or f"https://{service_name}.up.railway.app"
 
 
 # ---------------------------------------------------------------------------
-# Internal — GraphQL helpers
+# Token validation — catches auth errors before wasting time on mutations
 # ---------------------------------------------------------------------------
 
-def _token() -> str:
-    return _get_railway_token()
+_Q_ME = "query Me { me { id email } }"
 
 
-def _auth_headers(token: str) -> dict:
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+async def _validate_token(client: httpx.AsyncClient, token: str) -> None:
+    """Raises RuntimeError with a clear message if the token is invalid."""
+    try:
+        await _gql(client, token, _Q_ME, {})
+    except Exception as exc:
+        raise RuntimeError(
+            f"Railway token validation failed: {exc}\n"
+            "Check RAILWAY_TOKEN / RAILWAY_API_TOKEN in Railway → Variables."
+        ) from exc
 
+
+# ---------------------------------------------------------------------------
+# GraphQL helper — captures full error body on failure
+# ---------------------------------------------------------------------------
 
 async def _gql(
     client: httpx.AsyncClient,
@@ -125,29 +127,49 @@ async def _gql(
     resp = await client.post(
         _GRAPHQL_URL,
         json={"query": query, "variables": variables},
-        headers=_auth_headers(token),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         timeout=30.0,
     )
+
+    # Capture response body BEFORE raise_for_status so we can log it
+    try:
+        body_text = resp.text
+    except Exception:
+        body_text = "<unreadable>"
+
     if not resp.is_success:
-        body_preview = resp.text[:600]
+        log.error("[RAILWAY] HTTP %d from GraphQL | body=%s", resp.status_code, body_text[:400])
         raise RuntimeError(
-            f"Railway API HTTP {resp.status_code} — {body_preview}\n"
-            "Hint: RAILWAY_TOKEN must be a Personal Access Token (PAT) from "
-            "railway.app/account/tokens, not a project/service deploy token."
+            f"Railway API returned HTTP {resp.status_code}: {body_text[:300]}"
         )
+
     body = resp.json()
     if errors := body.get("errors"):
-        raise RuntimeError(f"Railway GraphQL error: {errors[0].get('message', errors)}")
+        msg = errors[0].get("message", str(errors))
+        log.error("[RAILWAY] GraphQL error: %s", msg)
+        raise RuntimeError(f"Railway GraphQL error: {msg}")
+
     return body["data"]
 
 
 # ---------------------------------------------------------------------------
-# Internal — Project / service management
+# Project management — uses edge/node connection style (Railway 2025 schema)
 # ---------------------------------------------------------------------------
 
-_Q_PROJECTS = """
-query ListProjects {
-  projects { nodes { id name environments { nodes { id name } } } }
+_Q_MY_PROJECTS = """
+query MyProjects {
+  me {
+    id
+    projects {
+      edges {
+        node {
+          id
+          name
+          environments { edges { node { id name } } }
+        }
+      }
+    }
+  }
 }
 """
 
@@ -155,7 +177,59 @@ _M_CREATE_PROJECT = """
 mutation CreateProject($name: String!) {
   projectCreate(input: { name: $name }) {
     id
-    environments { nodes { id name } }
+    environments { edges { node { id name } } }
+  }
+}
+"""
+
+_Q_PROJECT_BY_ID = """
+query ProjectById($id: ID!) {
+  project(id: $id) {
+    id
+    environments { edges { node { id name } } }
+  }
+}
+"""
+
+
+async def _get_or_create_project(
+    client: httpx.AsyncClient,
+    token: str,
+    name: str,
+) -> tuple[str, str]:
+    """Returns (project_id, production_env_id)."""
+
+    # Fast path: forced project ID
+    forced = os.getenv("RAILWAY_PROJECT_ID", "")
+    if forced:
+        data = await _gql(client, token, _Q_PROJECT_BY_ID, {"id": forced})
+        envs  = _unwrap_edges(data["project"]["environments"])
+        return forced, _pick_prod_env(envs)
+
+    # List my projects and find "ai-squadron"
+    data     = await _gql(client, token, _Q_MY_PROJECTS, {})
+    projects = _unwrap_edges(data["me"]["projects"])
+
+    for project in projects:
+        if project["name"] == name:
+            envs = _unwrap_edges(project["environments"])
+            return project["id"], _pick_prod_env(envs)
+
+    # Create new project
+    data     = await _gql(client, token, _M_CREATE_PROJECT, {"name": name})
+    project  = data["projectCreate"]
+    envs     = _unwrap_edges(project["environments"])
+    return project["id"], _pick_prod_env(envs)
+
+
+# ---------------------------------------------------------------------------
+# Service management
+# ---------------------------------------------------------------------------
+
+_Q_SERVICES = """
+query GetServices($projectId: ID!) {
+  project(id: $projectId) {
+    services { edges { node { id name } } }
   }
 }
 """
@@ -167,50 +241,16 @@ mutation CreateService($projectId: ID!, $name: String!) {
 """
 
 
-async def _get_or_create_project(
-    client: httpx.AsyncClient,
-    token: str,
-    name: str,
-) -> tuple[str, str]:
-    """Returns (project_id, production_env_id)."""
-    forced_id = os.getenv("RAILWAY_PROJECT_ID", "")
-    if forced_id:
-        data = await _gql(client, token, """
-            query GetProject($id: ID!) {
-              project(id: $id) { id environments { nodes { id name } } }
-            }
-        """, {"id": forced_id})
-        envs = data["project"]["environments"]["nodes"]
-        env_id = _pick_prod_env(envs)
-        return forced_id, env_id
-
-    data = await _gql(client, token, _Q_PROJECTS, {})
-    for project in data.get("projects", {}).get("nodes", []):
-        if project["name"] == name:
-            envs = project["environments"]["nodes"]
-            return project["id"], _pick_prod_env(envs)
-
-    # Create new project
-    data = await _gql(client, token, _M_CREATE_PROJECT, {"name": name})
-    project = data["projectCreate"]
-    envs = project["environments"]["nodes"]
-    return project["id"], _pick_prod_env(envs)
-
-
 async def _get_or_create_service(
     client: httpx.AsyncClient,
     token: str,
     project_id: str,
     service_name: str,
 ) -> str:
-    """Returns service_id, creating the service if it doesn't exist."""
-    data = await _gql(client, token, """
-        query GetServices($projectId: ID!) {
-          project(id: $projectId) { services { nodes { id name } } }
-        }
-    """, {"projectId": project_id})
+    data     = await _gql(client, token, _Q_SERVICES, {"projectId": project_id})
+    services = _unwrap_edges(data["project"]["services"])
 
-    for svc in data["project"]["services"]["nodes"]:
+    for svc in services:
         if svc["name"] == service_name:
             return svc["id"]
 
@@ -219,29 +259,33 @@ async def _get_or_create_service(
     return data["serviceCreate"]["id"]
 
 
+# ---------------------------------------------------------------------------
+# Utility
+# ---------------------------------------------------------------------------
+
+def _unwrap_edges(connection: dict) -> list[dict]:
+    """Convert Railway's edge/node connection format to a plain list."""
+    edges = connection.get("edges", [])
+    return [e["node"] for e in edges if "node" in e]
+
+
 def _pick_prod_env(envs: list[dict]) -> str:
-    """Return production environment id, or first available."""
     for e in envs:
-        if e["name"].lower() in ("production", "prod"):
+        if e.get("name", "").lower() in ("production", "prod"):
             return e["id"]
     return envs[0]["id"] if envs else ""
 
 
 # ---------------------------------------------------------------------------
-# Internal — Tarball
+# Tarball
 # ---------------------------------------------------------------------------
 
 def _make_tarball(build_dir: Path) -> bytes:
-    """
-    Pack build_dir into an in-memory .tar.gz, excluding node_modules and other
-    large directories that Railway doesn't need to receive.
-    """
     buf = io.BytesIO()
     with tarfile_mod.open(fileobj=buf, mode="w:gz") as tar:
         for file_path in sorted(build_dir.rglob("*")):
             if not file_path.is_file():
                 continue
-            # Skip any path that contains an excluded directory name
             parts = file_path.relative_to(build_dir).parts
             if any(part in _EXCLUDE_DIRS for part in parts):
                 continue
@@ -250,7 +294,7 @@ def _make_tarball(build_dir: Path) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Internal — Upload + Deploy
+# Upload + Deploy
 # ---------------------------------------------------------------------------
 
 async def _upload_tarball(
@@ -258,7 +302,6 @@ async def _upload_tarball(
     token: str,
     tarball: bytes,
 ) -> str:
-    """POST tarball to Railway's upload endpoint. Returns uploadId."""
     resp = await client.post(
         _UPLOAD_URL,
         files={"file": ("source.tar.gz", tarball, "application/gzip")},
@@ -267,10 +310,8 @@ async def _upload_tarball(
         verify=_ssl_verify(),
     )
     if not resp.is_success:
-        raise RuntimeError(
-            f"Railway upload HTTP {resp.status_code} — {resp.text[:400]}"
-        )
-    data = resp.json()
+        raise RuntimeError(f"Railway upload failed HTTP {resp.status_code}: {resp.text[:300]}")
+    data      = resp.json()
     upload_id = data.get("uploadId") or data.get("id", "")
     if not upload_id:
         raise RuntimeError(f"Railway upload returned no uploadId: {data}")
@@ -278,11 +319,11 @@ async def _upload_tarball(
 
 
 _M_CREATE_DEPLOYMENT = """
-mutation CreateDeployment($serviceId: ID!, $environmentId: ID!, $uploadId: ID!) {
+mutation CreateDeployment($serviceId: ID!, $environmentId: ID!, $uploadId: String!) {
   deploymentCreate(input: {
-    serviceId: $serviceId,
-    environmentId: $environmentId,
-    uploadId: $uploadId
+    serviceId: $serviceId
+    environmentId: $environmentId
+    sourceUploadId: $uploadId
   }) { id }
 }
 """
@@ -301,7 +342,6 @@ async def _create_deployment(
     env_id: str,
     upload_id: str,
 ) -> str:
-    """Create a Railway deployment from an upload. Returns deployment_id."""
     data = await _gql(client, token, _M_CREATE_DEPLOYMENT, {
         "serviceId":     service_id,
         "environmentId": env_id,
@@ -315,10 +355,6 @@ async def _poll_deployment(
     token: str,
     deployment_id: str,
 ) -> str:
-    """
-    Poll deployment status every _POLL_INTERVAL seconds.
-    Returns the live URL on SUCCESS; raises RuntimeError on failure.
-    """
     deadline = asyncio.get_event_loop().time() + _DEPLOY_TIMEOUT
     terminal = {"SUCCESS", "FAILED", "CRASHED", "REMOVED"}
 
@@ -326,7 +362,7 @@ async def _poll_deployment(
         data   = await _gql(client, token, _Q_DEPLOYMENT_STATUS, {"id": deployment_id})
         dep    = data["deployment"]
         status = dep["status"]
-        log.info("[RAILWAY] Deployment %s | status=%s", deployment_id[:8], status)
+        log.info("[RAILWAY] Poll | deploymentId=%s status=%s", deployment_id[:8], status)
 
         if status == "SUCCESS":
             return dep.get("url") or dep.get("staticUrl") or ""
