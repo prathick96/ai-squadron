@@ -19,7 +19,8 @@ import AdminLogin                from './pages/AdminLogin'
 import Landing      from './pages/Landing'
 import Pricing      from './pages/Pricing'
 import Auth         from './pages/Auth'
-import Onboarding   from './pages/Onboarding'
+import Onboarding    from './pages/Onboarding'
+import UserDashboard from './pages/UserDashboard'
 import Terms        from './pages/legal/Terms'
 import Privacy      from './pages/legal/Privacy'
 import Refund       from './pages/legal/Refund'
@@ -88,7 +89,7 @@ export default function App() {
         <Route path="/products" element={<PublicLayout><Products /></PublicLayout>} />
         <Route path="/pricing"  element={<PublicLayout><Pricing /></PublicLayout>} />
         <Route path="/auth"     element={<Auth />} />
-        <Route path="/dashboard"   element={<PublicLayout><UserDashboard /></PublicLayout>} />
+        <Route path="/dashboard"   element={<UserDashboard />} />
         <Route path="/onboarding" element={<Onboarding />} />
 
         {/* Legal pages */}

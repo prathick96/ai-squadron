@@ -13,24 +13,28 @@ from packages.db.client import get_db, is_supabase_connected, store_event
 log = logging.getLogger(__name__)
 
 
-def begin_pipeline_run(run_id: str, venture_id: str, department: str = "PRODUCT") -> None:
+def begin_pipeline_run(
+    run_id: str, venture_id: str, department: str = "PRODUCT",
+    user_id: str | None = None,
+) -> None:
     if not is_supabase_connected():
         return
-    db = get_db()
+    db  = get_db()
     row = {
-        "run_id": run_id,
-        "venture_id": venture_id,
-        "pipeline_stage": "RESEARCH_NODE",
-        "status": "RUNNING",
-        "qa_retry_count": 0,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "department": department,
+        "run_id":        run_id,
+        "venture_id":    venture_id,
+        "pipeline_stage":"RESEARCH_NODE",
+        "status":        "RUNNING",
+        "qa_retry_count":0,
+        "started_at":    datetime.now(timezone.utc).isoformat(),
+        "department":    department,
+        "user_id":       user_id,   # associates this run with a customer (None = admin)
     }
     try:
         db.table("pipeline_runs").upsert(row, on_conflict="run_id").execute()
     except TypeError:
         db.table("pipeline_runs").upsert(row).execute()
-    log.debug("[pipeline] RUNNING run_id=%s dept=%s", run_id, department)
+    log.debug("[pipeline] RUNNING run_id=%s dept=%s user=%s", run_id, department, user_id)
 
 
 def update_pipeline_stage(run_id: str, venture_id: str, stage: str, qa_retry_count: int = 0) -> None:

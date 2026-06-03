@@ -125,7 +125,7 @@ def _run_to_dict(rec: RunRecord) -> dict:
     }
 
 
-async def _run_pipeline_background(state: dict, department: str) -> None:
+async def _run_pipeline_background(state: dict, department: str, user_id: str | None = None) -> None:
     """Background task: stream the full pipeline and push updates to the registry."""
     from apps.orchestrator.graph import build_squadron_graph
     from packages.db.client import upsert_venture
@@ -148,7 +148,7 @@ async def _run_pipeline_background(state: dict, department: str) -> None:
     final_state: dict = dict(state)
 
     try:
-        begin_pipeline_run(run_id, venture_id, department)
+        begin_pipeline_run(run_id, venture_id, department, user_id=user_id)
         graph = build_squadron_graph(department)
 
         # Stream node-by-node: each chunk is {node_name: state_updates}
@@ -381,6 +381,143 @@ def add_ledger_entry(body: LedgerEntryBody) -> dict:
     }
     upsert_ledger_row(row)
     return {"ok": True, "entry": row}
+
+
+# ---------------------------------------------------------------------------
+# Customer user API — profile, ventures, plan enforcement
+# ---------------------------------------------------------------------------
+
+_PLAN_RUN_LIMITS = {"starter": 1, "builder": 10, "studio": -1}  # -1 = unlimited
+
+
+def _get_user_profile(user_id: str) -> dict | None:
+    """Fetch user_profiles row for this Supabase auth user."""
+    from packages.db.client import get_db, is_supabase_connected
+    if not is_supabase_connected():
+        return None
+    try:
+        result = get_db().table("user_profiles").select("*").eq("id", user_id).single().execute()
+        return result.data
+    except Exception:
+        return None
+
+
+def _count_user_runs_this_month(user_id: str) -> int:
+    """Count non-failed pipeline runs for this user in the current calendar month."""
+    from packages.db.client import get_db, is_supabase_connected
+    from datetime import date
+    if not is_supabase_connected():
+        return 0
+    try:
+        month_start = date.today().replace(day=1).isoformat()
+        result = get_db() \
+            .table("pipeline_runs") \
+            .select("run_id", count="exact") \
+            .eq("user_id", user_id) \
+            .gte("started_at", month_start) \
+            .neq("status", "FAILED") \
+            .execute()
+        return result.count or 0
+    except Exception:
+        return 0
+
+
+@app.get("/api/user/profile")
+def get_user_profile(request: Request) -> dict:
+    """
+    Return the authenticated customer's plan, run usage, and venture summary.
+    Reads the Supabase JWT from the Authorization header.
+    """
+    from supabase import create_client
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Authorization header required")
+
+    jwt = auth_header[7:]
+
+    # Verify JWT and get user_id from Supabase
+    try:
+        import os as _os
+        supa = create_client(
+            _os.getenv("SUPABASE_URL", ""),
+            _os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""),
+        )
+        user_resp = supa.auth.get_user(jwt)
+        user_id   = user_resp.user.id
+        user_email = user_resp.user.email or ""
+    except Exception as exc:
+        raise HTTPException(401, f"Invalid session: {exc}")
+
+    profile = _get_user_profile(user_id)
+    plan    = (profile or {}).get("plan", "starter")
+    limit   = _PLAN_RUN_LIMITS.get(plan, 1)
+    used    = _count_user_runs_this_month(user_id)
+
+    return {
+        "user_id":           user_id,
+        "email":             user_email,
+        "plan":              plan,
+        "runs_used":         used,
+        "runs_limit":        limit,
+        "runs_remaining":    max(0, limit - used) if limit != -1 else -1,
+        "unlimited":         limit == -1,
+        "onboarding_done":   (profile or {}).get("onboarding_done", False),
+    }
+
+
+@app.get("/api/user/ventures")
+def get_user_ventures(request: Request) -> dict:
+    """
+    Return this user's pipeline runs (their ventures) with live_url if deployed.
+    """
+    import os as _os
+    from supabase import create_client
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Authorization header required")
+
+    jwt = auth_header[7:]
+    try:
+        supa      = create_client(_os.getenv("SUPABASE_URL", ""), _os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
+        user_resp = supa.auth.get_user(jwt)
+        user_id   = user_resp.user.id
+    except Exception as exc:
+        raise HTTPException(401, f"Invalid session: {exc}")
+
+    from packages.db.client import get_db, is_supabase_connected
+    if not is_supabase_connected():
+        return {"ventures": [], "count": 0}
+
+    try:
+        runs = get_db() \
+            .table("pipeline_runs") \
+            .select("run_id,venture_id,status,current_stage,started_at,completed_at,department") \
+            .eq("user_id", user_id) \
+            .order("started_at", desc=True) \
+            .limit(20) \
+            .execute()
+
+        ventures = []
+        for r in (runs.data or []):
+            vid = r.get("venture_id", "")
+            # Fetch live_url from ventures table
+            v_res = get_db().table("ventures").select("niche,live_url,status,venture_type") \
+                .eq("venture_id", vid).execute()
+            v_data = (v_res.data or [{}])[0]
+            ventures.append({
+                **r,
+                "niche":        v_data.get("niche", ""),
+                "live_url":     v_data.get("live_url"),
+                "venture_status": v_data.get("status", ""),
+                "venture_type": v_data.get("venture_type", "MICRO_SAAS"),
+            })
+
+        return {"ventures": ventures, "count": len(ventures)}
+    except Exception as exc:
+        log.warning("[USER_VENTURES] failed: %s", exc)
+        return {"ventures": [], "count": 0}
 
 
 @app.get("/api/ventures")
@@ -837,23 +974,66 @@ def get_security_alerts() -> dict:
 # ---------------------------------------------------------------------------
 
 @app.post("/api/pipeline/run")
-async def trigger_pipeline(body: PipelineRunBody, background_tasks: BackgroundTasks) -> dict:
+async def trigger_pipeline(
+    body: PipelineRunBody,
+    background_tasks: BackgroundTasks,
+    request: Request,
+) -> dict:
     """
-    Launch a full pipeline run asynchronously.
-    Returns immediately with {run_id, venture_id, status: "STARTED"}.
-    Poll GET /api/pipeline/{run_id} for live status.
+    Launch a pipeline run.
+    - If called with a valid customer JWT (Authorization header): enforces plan limits.
+    - If called from the admin Command Center (no JWT or admin email): unlimited.
+    Returns {run_id, venture_id, status: 'STARTED'}.
     """
     from packages.state.agent_state import init_state
+    import os as _os
 
+    # ── Customer plan enforcement ────────────────────────────────────────────
+    user_id: str | None = None
+    auth_header = request.headers.get("Authorization", "")
+
+    if auth_header.startswith("Bearer "):
+        jwt = auth_header[7:]
+        try:
+            from supabase import create_client as _sc
+            supa      = _sc(_os.getenv("SUPABASE_URL", ""), _os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
+            user_resp = supa.auth.get_user(jwt)
+            caller    = user_resp.user
+
+            # Admin callers: skip limit checks
+            admin_email = _os.getenv("VITE_ADMIN_EMAIL", "")
+            if caller.email and caller.email != admin_email:
+                user_id = caller.id
+                profile = _get_user_profile(user_id)
+                plan    = (profile or {}).get("plan", "starter")
+                limit   = _PLAN_RUN_LIMITS.get(plan, 1)
+                used    = _count_user_runs_this_month(user_id)
+
+                if limit != -1 and used >= limit:
+                    raise HTTPException(
+                        429,
+                        f"Monthly run limit reached ({used}/{limit} for {plan} plan). "
+                        "Upgrade to Builder ($49/mo) for 10 runs, or Studio for unlimited."
+                    )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            log.debug("[PIPELINE_RUN] Auth check skipped: %s", exc)
+
+    # ── Launch ───────────────────────────────────────────────────────────────
     state = init_state(body.venture_id)
-    run_id = state["run_id"]
+    run_id     = state["run_id"]
     venture_id = state["venture_id"]
 
-    registry.start(run_id, venture_id, body.department)
-    background_tasks.add_task(_run_pipeline_background, state, body.department)
+    # Tag the run with user_id so it appears in their dashboard
+    if user_id:
+        state["_user_id"] = user_id  # passed to background task
 
-    log.info("[PIPELINE_API] Launched run_id=%s venture_id=%s dept=%s",
-             run_id, venture_id, body.department)
+    registry.start(run_id, venture_id, body.department)
+    background_tasks.add_task(_run_pipeline_background, state, body.department, user_id)
+
+    log.info("[PIPELINE_API] Launched run_id=%s venture_id=%s dept=%s user=%s",
+             run_id, venture_id, body.department, user_id or "admin")
     return {"run_id": run_id, "venture_id": venture_id, "status": "STARTED"}
 
 
