@@ -188,7 +188,7 @@ RETURN ONLY this JSON (no markdown, first char must be {{):
   "recommended_monetization": ["freemium", "subscription", "one_time"],
   "content_angles": ["SEO angle 1", "Reddit angle 2"],
   "go_decision": true,
-  "go_rationale": "Score: TAM={tam}/25 Gap={gap}/25 Build={build}/25 Revenue={rev}/25 Total={total}/100. [Specific rationale citing dossier evidence]"
+  "go_rationale": "Score: TAM=XX/25 Gap=XX/25 Build=XX/25 Revenue=XX/25 Total=XX/100. [Specific rationale citing dossier evidence]"
 }}
 """
 

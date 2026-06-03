@@ -12,6 +12,8 @@ import { isSupabaseConfigured }  from './lib/supabase'
 import SetupRequired             from './components/SetupRequired'
 import Navbar                    from './components/Navbar'
 import Footer                    from './components/Footer'
+import AdminGuard                from './components/AdminGuard'
+import AdminLogin                from './pages/AdminLogin'
 
 // Public pages (lazy imports keep initial bundle small)
 import Landing      from './pages/Landing'
@@ -95,10 +97,15 @@ export default function App() {
         <Route path="/legal/refund"  element={<Legal><Refund /></Legal>} />
         <Route path="/legal"         element={<Navigate to="/legal/terms" replace />} />
 
-        {/* ── Admin route — Command Center dashboard ─────────────────────── */}
-        {/* Hidden from public navigation. Admins arrive here after login. */}
-        <Route path="/command-center" element={<CommandCenter />} />
-        <Route path="/admin"          element={<Navigate to="/auth?mode=login" replace />} />
+        {/* ── Admin routes — protected by AdminGuard (session + email + idle) ── */}
+        <Route path="/admin-login"    element={<AdminLogin />} />
+        <Route path="/command-center" element={
+          <AdminGuard>
+            <CommandCenter />
+          </AdminGuard>
+        } />
+        {/* Legacy /admin redirect → secure login page (not public auth) */}
+        <Route path="/admin"          element={<Navigate to="/admin-login" replace />} />
 
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />

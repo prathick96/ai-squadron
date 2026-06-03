@@ -15,12 +15,12 @@ export default function Auth() {
   const [loading,  setLoading]  = useState(false)
   const [sent,     setSent]     = useState(false)
 
-  // Redirect if already logged in
+  // Redirect if already logged in — admin email goes to admin-login page
   useEffect(() => {
     supabase?.auth.getUser().then(({ data }) => {
       if (!data.user) return
       if (data.user.email === ADMIN_EMAIL) {
-        navigate('/command-center', { replace: true })
+        navigate('/command-center', { replace: true })   // AdminGuard verifies
       } else {
         navigate('/dashboard', { replace: true })
       }
