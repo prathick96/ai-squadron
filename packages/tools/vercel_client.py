@@ -140,20 +140,23 @@ async def _upload_file(
     sha: str,
     data: bytes,
 ) -> None:
-    """Upload one file to Vercel's file cache (idempotent — uses SHA-1 dedup)."""
+    """Upload one file to Vercel's file cache (idempotent — uses SHA-1 dedup).
+
+    Vercel /v2/files expects raw bytes with NO Content-Type header.
+    Sending application/octet-stream triggers a 415 Unsupported Media Type.
+    """
     qs = f"?teamId={team_id}" if team_id else ""
     resp = await client.put(
         f"{_API}/v2/files{qs}",
         content=data,
         headers={
-            "Authorization":  f"Bearer {token}",
-            "Content-Type":   "application/octet-stream",
-            "Content-Length": str(len(data)),
+            "Authorization":   f"Bearer {token}",
+            "Content-Length":  str(len(data)),
             "x-vercel-digest": sha,
         },
         timeout=60.0,
     )
-    # 200 = uploaded, 409 = already exists (both are fine)
+    # 200 = uploaded, 201 = created, 409 = already exists (all fine)
     if resp.status_code not in (200, 201, 409):
         raise RuntimeError(
             f"Vercel file upload failed HTTP {resp.status_code}: {resp.text[:200]}"

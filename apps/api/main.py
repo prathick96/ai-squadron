@@ -60,6 +60,20 @@ async def lifespan(app: FastAPI):
             log.info("Revenue Engine scheduler started (daily 00:00 UTC + Monday 08:00 UTC)")
         except ImportError:
             log.warning("APScheduler not installed — revenue scheduler not started")
+    # Pre-warm the in-memory cache so the first Command Center load is instant.
+    # Uses mock data — the real Supabase data populates on the first 60s TTL expiry.
+    async def _prewarm():
+        await asyncio.sleep(3)   # let DB pool settle first
+        try:
+            _cached("agents",       _CACHE_TTL, lambda: {"agents": agent_grid(),      "source": "mock"})
+            _cached("revenue",      _CACHE_TTL, lambda: {**revenue_summary(),         "source": "mock"})
+            _cached("trends",       _CACHE_TTL, trend_heatmap)
+            _cached("security",     _CACHE_TTL, lambda: {"alerts": security_alerts()})
+            _cached("revenue_plan", _CACHE_TTL, revenue_plan)
+            log.info("[PREWARM] Cache warm — Command Center first load is now instant")
+        except Exception as exc:
+            log.debug("[PREWARM] skipped: %s", exc)
+    asyncio.create_task(_prewarm())
     yield
     if scheduler:
         scheduler.shutdown()
@@ -236,7 +250,7 @@ def _try_supabase_agents() -> list[dict] | None:
 
 def _portfolio_from_supabase() -> dict | None:
     from packages.db.pipeline import fetch_ventures_for_portfolio
-    all_ventures = fetch_ventures_for_portfolio(450)
+    all_ventures = fetch_ventures_for_portfolio(50)
     if not all_ventures:
         return None
     ventures = [v for v in all_ventures if v.get("status") != "KILLED"]
@@ -249,7 +263,9 @@ def _portfolio_from_supabase() -> dict | None:
             "niche": v.get("niche", ""),
             "mrr_usd": 0.0,
         })
-    while len(slots) < 450:
+    # Show live ventures + 10 empty slots max (previously padded to 450 — too slow)
+    target = max(10, len(slots) + 10)
+    while len(slots) < target:
         slots.append({
             "slot": len(slots) + 1,
             "venture_id": None,
@@ -274,7 +290,7 @@ def _revenue_payload() -> tuple[dict, str]:
 # The registry (live runs) is never cached — it's in-memory and instant.
 # ---------------------------------------------------------------------------
 _cache: dict[str, tuple[float, object]] = {}
-_CACHE_TTL = 30.0   # seconds
+_CACHE_TTL = 60.0   # seconds — raised from 30s; agents/revenue now also cached
 
 
 def _cached(key: str, ttl: float, fn):
@@ -335,31 +351,36 @@ def health() -> dict:
 
 @app.get("/api/agents")
 def get_agents() -> dict:
-    from packages.db.client import is_supabase_connected
-    live = _try_supabase_agents()
-    if live:
-        return {"agents": live, "source": "supabase"}
-    # Supabase connected but agent_logs is empty (no pipeline runs yet)
-    source = "supabase_empty" if is_supabase_connected() else "mock"
-    return {"agents": agent_grid(), "source": source}
+    def _compute():
+        from packages.db.client import is_supabase_connected
+        live = _try_supabase_agents()
+        if live:
+            return {"agents": live, "source": "supabase"}
+        source = "supabase_empty" if is_supabase_connected() else "mock"
+        return {"agents": agent_grid(), "source": source}
+    return _cached("agents", _CACHE_TTL, _compute)
 
 
 @app.get("/api/revenue")
 def get_revenue() -> dict:
-    try:
-        payload, source = _revenue_payload()
-        return {**payload, "source": source}
-    except Exception as exc:
-        log.warning("[API] /api/revenue failed (%s) — returning mock", exc)
-        return {**revenue_summary(), "source": "mock"}
+    def _compute():
+        try:
+            payload, source = _revenue_payload()
+            return {**payload, "source": source}
+        except Exception as exc:
+            log.warning("[API] /api/revenue failed (%s) — returning mock", exc)
+            return {**revenue_summary(), "source": "mock"}
+    return _cached("revenue", _CACHE_TTL, _compute)
 
 
 @app.get("/api/revenue/plan")
 def get_revenue_plan() -> dict:
-    try:
-        return live_revenue_plan()
-    except Exception:
-        return revenue_plan()
+    def _compute():
+        try:
+            return live_revenue_plan()
+        except Exception:
+            return revenue_plan()
+    return _cached("revenue_plan", _CACHE_TTL, _compute)
 
 
 @app.get("/api/confidence")
@@ -1115,7 +1136,7 @@ def get_trends() -> dict:
 
 @app.get("/api/security/alerts")
 def get_security_alerts() -> dict:
-    return {"alerts": security_alerts()}
+    return _cached("security", _CACHE_TTL, lambda: {"alerts": security_alerts()})
 
 
 # ---------------------------------------------------------------------------

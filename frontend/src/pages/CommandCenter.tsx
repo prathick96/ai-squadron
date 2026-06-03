@@ -559,7 +559,7 @@ export default function App() {
     refresh();
     refreshRecentRuns();
     refreshVentures();
-    const id = setInterval(refresh, 8000);
+    const id = setInterval(refresh, 30000); // 30s — server-side cache is 60s; no point polling faster
     return () => clearInterval(id);
   }, [refresh, refreshRecentRuns, refreshVentures]);
 
