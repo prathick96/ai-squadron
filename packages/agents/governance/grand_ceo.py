@@ -9,7 +9,7 @@ Output:  VentureBrief with go_decision + ranked niche_shortlist stored for futur
 LLM Council design (2026-05-31):
   - Operator profile injected into every decision (constraints-aware analysis)
   - 4-dimension scoring rubric: TAM + CompetitionGap + BuildScore + RevenueVelocity
-  - GO_THRESHOLD = 65 / 100 (raises bar from previous always-pass heuristic)
+  - GO_THRESHOLD = 70 / 100 (raises bar from previous always-pass heuristic)
   - CEO outputs ranked shortlist of 3 niches — #2 and #3 stored for next run
   - Skeptic's best argument quoted and explicitly answered (cannot be hand-waved)
   - Niche memory: exhausted/KILL'd niches excluded before evaluation
@@ -76,7 +76,7 @@ REVENUE_VELOCITY (0-25): Realistic path to first paid customer within 90 days
   8  = Requires sales calls, procurement, or institutional approval
   0  = No clear monetisation path without significant marketing spend
 
-GO_THRESHOLD: Total score >= 65 to issue go_decision: true
+GO_THRESHOLD: Total score >= 70 to issue go_decision: true
 """
 
 # ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ Your task:
 2. Identify 3 candidate niches (can include the council's pick or substitutes)
 3. Score each using the 4-dimension rubric
 4. Rank them by total score
-5. Only set go_decision: true if the top-ranked niche scores >= 65
+5. Only set go_decision: true if the top-ranked niche scores >= 70
 
 RETURN ONLY this JSON (no markdown, first char must be {{):
 {{
@@ -261,13 +261,13 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
     shortlist  = brief_data.get("niche_shortlist", [])
     top_niche  = shortlist[0] if shortlist else {}
     total_score = top_niche.get("confidence_score", 0)
-    if total_score < 65 and brief_data.get("go_decision") is True:
+    if total_score < 70 and brief_data.get("go_decision") is True:
         brief_data["go_decision"] = False
         brief_data["go_rationale"] = (
-            f"Score {total_score}/100 below GO_THRESHOLD of 65. "
+            f"Score {total_score}/100 below GO_THRESHOLD of 70. "
             + brief_data.get("go_rationale", "")
         )
-        log.warning("[CEO_NODE] go_decision overridden to False — score %d < 65", total_score)
+        log.warning("[CEO_NODE] go_decision overridden to False — score %d < 70", total_score)
 
     brief_payload = VentureBriefPayload(**{
         k: v for k, v in brief_data.items()

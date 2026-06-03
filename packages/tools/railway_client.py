@@ -63,55 +63,48 @@ async def deploy_to_railway(venture_id: str, build_dir: Path) -> str:
     Deploy a Vite build directory to Railway.
     Returns the live HTTPS URL on success.
     Raises RuntimeError if the deployment fails or times out.
+
+    Supports two token types:
+      User Token  (Account Settings → Tokens): auto-manages projects.
+      Project Token (Project → Settings → Tokens): set RAILWAY_PROJECT_ID too.
     """
     token        = _get_railway_token()
     service_name = venture_id[:30]
+    forced_pid   = os.getenv("RAILWAY_PROJECT_ID", "")
 
     async with httpx.AsyncClient(timeout=45.0, verify=_ssl_verify()) as client:
-        # 1. Validate token
-        await _validate_token(client, token)
-
-        # 2. Project
-        project_id, env_id = await _get_or_create_project(client, token, "ai-squadron")
+        # 1. Determine project + environment
+        #    - If RAILWAY_PROJECT_ID is set: use it directly (project token works here)
+        #    - Otherwise: try me-based auto-discovery (requires User Token)
+        if forced_pid:
+            log.info("[RAILWAY] Using RAILWAY_PROJECT_ID=%s", forced_pid[:8])
+            data   = await _gql(client, token, _Q_PROJECT_BY_ID, {"id": forced_pid})
+            envs   = _unwrap_edges(data["project"]["environments"])
+            project_id, env_id = forced_pid, _pick_prod_env(envs)
+        else:
+            log.info("[RAILWAY] No RAILWAY_PROJECT_ID set — using User Token auto-discovery")
+            project_id, env_id = await _get_or_create_project(client, token, "ai-squadron")
         log.info("[RAILWAY] project=%s env=%s", project_id[:8], env_id[:8])
 
-        # 3. Service
+        # 2. Service
         service_id = await _get_or_create_service(client, token, project_id, service_name)
         log.info("[RAILWAY] service=%s (%s)", service_id[:8], service_name)
 
-        # 4. Tarball
+        # 3. Tarball
         tarball   = _make_tarball(build_dir)
         log.info("[RAILWAY] Tarball size=%.1f KB", len(tarball) / 1024)
 
-        # 5. Upload
+        # 4. Upload
         upload_id = await _upload_tarball(client, token, tarball)
         log.info("[RAILWAY] Uploaded → uploadId=%s", upload_id[:8])
 
-        # 6. Deploy
+        # 5. Deploy
         deploy_id = await _create_deployment(client, token, service_id, env_id, upload_id)
         log.info("[RAILWAY] Deployment queued → deploymentId=%s", deploy_id[:8])
 
-        # 7. Poll
+        # 6. Poll
         url = await _poll_deployment(client, token, deploy_id)
         return url or f"https://{service_name}.up.railway.app"
-
-
-# ---------------------------------------------------------------------------
-# Token validation — catches auth errors before wasting time on mutations
-# ---------------------------------------------------------------------------
-
-_Q_ME = "query Me { me { id email } }"
-
-
-async def _validate_token(client: httpx.AsyncClient, token: str) -> None:
-    """Raises RuntimeError with a clear message if the token is invalid."""
-    try:
-        await _gql(client, token, _Q_ME, {})
-    except Exception as exc:
-        raise RuntimeError(
-            f"Railway token validation failed: {exc}\n"
-            "Check RAILWAY_TOKEN / RAILWAY_API_TOKEN in Railway → Variables."
-        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -197,28 +190,31 @@ async def _get_or_create_project(
     token: str,
     name: str,
 ) -> tuple[str, str]:
-    """Returns (project_id, production_env_id)."""
+    """
+    Returns (project_id, production_env_id).
+    Requires a User Token (Account Settings → Tokens).
+    For Project Tokens, set RAILWAY_PROJECT_ID and this function is bypassed.
+    """
+    try:
+        data = await _gql(client, token, _Q_MY_PROJECTS, {})
+    except Exception as exc:
+        raise RuntimeError(
+            "Railway 'me' query failed — this requires a User Token, not a Project Token.\n"
+            "Fix: Account avatar → Account Settings → Tokens → New Token (copy the value).\n"
+            "OR: set RAILWAY_PROJECT_ID env var and use a Project Token instead.\n"
+            f"Detail: {exc}"
+        ) from exc
 
-    # Fast path: forced project ID
-    forced = os.getenv("RAILWAY_PROJECT_ID", "")
-    if forced:
-        data = await _gql(client, token, _Q_PROJECT_BY_ID, {"id": forced})
-        envs  = _unwrap_edges(data["project"]["environments"])
-        return forced, _pick_prod_env(envs)
-
-    # List my projects and find "ai-squadron"
-    data     = await _gql(client, token, _Q_MY_PROJECTS, {})
     projects = _unwrap_edges(data["me"]["projects"])
-
     for project in projects:
         if project["name"] == name:
             envs = _unwrap_edges(project["environments"])
             return project["id"], _pick_prod_env(envs)
 
     # Create new project
-    data     = await _gql(client, token, _M_CREATE_PROJECT, {"name": name})
-    project  = data["projectCreate"]
-    envs     = _unwrap_edges(project["environments"])
+    data    = await _gql(client, token, _M_CREATE_PROJECT, {"name": name})
+    project = data["projectCreate"]
+    envs    = _unwrap_edges(project["environments"])
     return project["id"], _pick_prod_env(envs)
 
 
