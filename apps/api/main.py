@@ -246,6 +246,14 @@ def _railway_ok() -> bool:
         return False
 
 
+def _vercel_ok() -> bool:
+    try:
+        from packages.tools.vercel_client import vercel_available
+        return vercel_available()
+    except Exception:
+        return False
+
+
 @app.get("/api/health")
 def health() -> dict:
     # Wrapped in try/except: a broken optional import must never turn the
@@ -266,6 +274,7 @@ def health() -> dict:
         "storage":              storage,
         "active_pipeline_runs": active,
         "railway_available":    _railway_ok(),
+        "vercel_available":     _vercel_ok(),
     }
 
 
@@ -661,21 +670,20 @@ def _cancel_subscription(data: dict) -> None:
 @app.post("/api/ventures/{venture_id}/deploy")
 async def deploy_venture(venture_id: str) -> dict:
     """
-    Deploy a venture's built React app to Railway OR Netlify.
+    Deploy a venture's built React app to Vercel (primary) or Railway (fallback).
 
     Provider priority:
-      1. Netlify  — if NETLIFY_TOKEN is set. Simple zip-upload API, no GraphQL.
-                    Best choice: free tier, no project/env ID needed.
-      2. Railway  — if RAILWAY_TOKEN/RAILWAY_API_TOKEN is set.
-                    Requires GraphQL API access (sometimes blocked by free tier / token type).
+      1. Vercel  — if VERCEL_TOKEN is set. SHA-1 file dedup, instant CDN, no auth complexity.
+                   Best choice: free tier, works reliably, no 429 warm-up issues.
+      2. Railway — if RAILWAY_TOKEN is set (Account Settings token, not Project Token).
 
-    Set ONE of these in Railway Variables:
-      NETLIFY_TOKEN=<from app.netlify.com → User Settings → Applications>
-      RAILWAY_TOKEN=<from railway.app → Account avatar → Account Settings → Tokens>
+    Set in Railway Variables:
+      VERCEL_TOKEN  = from vercel.com → Account Settings → Tokens → New Token
+      VERCEL_TEAM_ID = optional, for team deployments
     """
     from packages.db.pipeline import fetch_build_artifact
+    from packages.tools.vercel_client import deploy_to_vercel, vercel_available
     from packages.tools.railway_client import deploy_to_railway, railway_available
-    from packages.tools.netlify_client import deploy_to_netlify, netlify_available
     import os as _os
 
     builds_root = Path(_os.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
@@ -738,26 +746,23 @@ async def deploy_venture(venture_id: str) -> dict:
         except Exception as exc:
             raise HTTPException(500, f"Build step failed: {exc}")
 
-    # ── Deploy — Netlify first (simpler), Railway as fallback ───────────────
-    pass  # provider tracked via log
-    url       = ""
-    last_err  = ""
+    # ── Deploy — Vercel first, Railway as fallback ─────────────────────────
+    url      = ""
+    last_err = ""
 
-    if netlify_available():
+    if vercel_available():
         try:
-            log.info("[DEPLOY] Trying Netlify for %s", venture_id)
-            url      = await deploy_to_netlify(venture_id, build_dir)
-
-            log.info("[DEPLOY] ✓ Netlify | url=%s", url)
+            log.info("[DEPLOY] Deploying to Vercel | venture=%s", venture_id)
+            url = await deploy_to_vercel(venture_id, build_dir)
+            log.info("[DEPLOY] ✓ Vercel | url=%s", url)
         except Exception as exc:
             last_err = str(exc)
-            log.warning("[DEPLOY] Netlify failed (%s) — trying Railway", exc)
+            log.warning("[DEPLOY] Vercel failed (%s) — trying Railway", exc)
 
     if not url and railway_available():
         try:
-            log.info("[DEPLOY] Trying Railway for %s", venture_id)
-            url      = await deploy_to_railway(venture_id, build_dir)
-
+            log.info("[DEPLOY] Deploying to Railway | venture=%s", venture_id)
+            url = await deploy_to_railway(venture_id, build_dir)
             log.info("[DEPLOY] ✓ Railway | url=%s", url)
         except Exception as exc:
             last_err = str(exc)
@@ -766,13 +771,11 @@ async def deploy_venture(venture_id: str) -> dict:
     if not url:
         raise HTTPException(
             500,
-            f"Deployment failed on all providers.\n"
-            f"Last error: {last_err}\n\n"
-            "To fix:\n"
-            "  Option A (recommended): Set NETLIFY_TOKEN in Railway Variables\n"
-            "    → Get token from app.netlify.com → User Settings → Applications → New access token\n"
-            "  Option B: Set RAILWAY_TOKEN (Account Settings token, not Project Token)\n"
-            "    → Get from railway.app → Account avatar → Account Settings → Tokens"
+            f"Deployment failed.\nLast error: {last_err}\n\n"
+            "Set VERCEL_TOKEN in Railway Variables:\n"
+            "  1. vercel.com → click avatar → Account Settings → Tokens → Create Token\n"
+            "  2. Add VERCEL_TOKEN=<token> in Railway → your service → Variables\n"
+            "  3. Click Launch Product again"
         )
 
     # ── Persist live_url to Supabase ─────────────────────────────────────────

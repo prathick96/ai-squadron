@@ -339,7 +339,7 @@ function ProductActions({ ventureId, onRefresh }: { ventureId: string; onRefresh
           }}
         >
           {deploying ? (
-            <>⏳ Deploying to Railway…</>
+            <>⏳ Deploying to Netlify…</>
           ) : (
             <>🚀 Launch Product</>
           )}
