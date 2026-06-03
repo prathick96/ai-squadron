@@ -95,9 +95,11 @@ async def deploy_to_netlify(venture_id: str, build_dir: Path) -> str:
             )
 
         data = resp.json()
-        # Wait for processing to finish then return the SSL URL
+        # Prefer canonical site URL (ssl_url) over deploy-preview URL (deploy_ssl_url).
+        # Deploy-preview URLs are rate-limited on Netlify free tier (429).
+        # The site URL (luminous-souffle-xxx.netlify.app) has no such limit.
         deploy_id = data.get("deploy_id") or data.get("id", "")
-        ssl_url   = data.get("deploy_ssl_url") or data.get("ssl_url", "")
+        ssl_url   = data.get("ssl_url") or data.get("deploy_ssl_url") or data.get("url", "")
 
         if ssl_url:
             log.info("[NETLIFY] ✓ Deployed | url=%s", ssl_url)
@@ -123,7 +125,9 @@ async def _poll_netlify_deploy(client: httpx.AsyncClient, deploy_id: str) -> str
             url   = data.get("deploy_ssl_url") or data.get("ssl_url", "")
             log.info("[NETLIFY] Poll state=%s", state)
             if state == "ready" and url:
-                return url
+                # Always return canonical site URL, never the deploy-preview URL
+                canonical = data.get("ssl_url") or url
+                return canonical
             if state in ("error", "failed"):
                 raise RuntimeError(f"Netlify deploy {deploy_id} failed: {data.get('error_message')}")
         await asyncio.sleep(5)
