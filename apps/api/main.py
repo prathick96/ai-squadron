@@ -807,20 +807,20 @@ def _cancel_subscription(data: dict) -> None:
 @app.post("/api/ventures/{venture_id}/deploy")
 async def deploy_venture(venture_id: str) -> dict:
     """
-    Deploy a venture's built React app to Vercel (primary) or Railway (fallback).
+    Deploy a venture's built React app to Railway (primary) or Vercel (fallback).
 
     Provider priority:
-      1. Vercel  — if VERCEL_TOKEN is set. SHA-1 file dedup, instant CDN, no auth complexity.
-                   Best choice: free tier, works reliably, no 429 warm-up issues.
-      2. Railway — if RAILWAY_TOKEN is set (Account Settings token, not Project Token).
+      1. Railway — if RAILWAY_TOKEN is set (MUST be a User Account Token).
+                   Get from: railway.app → avatar → Account Settings → Tokens → New Token
+                   NOT a Project Token (those return 'Not Authorized').
+      2. Vercel  — if VERCEL_TOKEN is set. Zero-config fallback.
 
-    Set in Railway Variables:
-      VERCEL_TOKEN  = from vercel.com → Account Settings → Tokens → New Token
-      VERCEL_TEAM_ID = optional, for team deployments
+    Required Railway Variable:
+      RAILWAY_TOKEN = <User Account Token from Account Settings>
     """
     from packages.db.pipeline import fetch_build_artifact
-    from packages.tools.vercel_client import deploy_to_vercel, vercel_available
     from packages.tools.railway_client import deploy_to_railway, railway_available
+    from packages.tools.vercel_client import deploy_to_vercel, vercel_available
     import os as _os
 
     builds_root = Path(_os.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
@@ -883,36 +883,37 @@ async def deploy_venture(venture_id: str) -> dict:
         except Exception as exc:
             raise HTTPException(500, f"Build step failed: {exc}")
 
-    # ── Deploy — Vercel first, Railway as fallback ─────────────────────────
+    # ── Deploy — Railway first, Vercel as fallback ─────────────────────────
     url      = ""
     last_err = ""
 
-    if vercel_available():
-        try:
-            log.info("[DEPLOY] Deploying to Vercel | venture=%s", venture_id)
-            url = await deploy_to_vercel(venture_id, build_dir)
-            log.info("[DEPLOY] ✓ Vercel | url=%s", url)
-        except Exception as exc:
-            last_err = str(exc)
-            log.warning("[DEPLOY] Vercel failed (%s) — trying Railway", exc)
-
-    if not url and railway_available():
+    if railway_available():
         try:
             log.info("[DEPLOY] Deploying to Railway | venture=%s", venture_id)
             url = await deploy_to_railway(venture_id, build_dir)
             log.info("[DEPLOY] ✓ Railway | url=%s", url)
         except Exception as exc:
             last_err = str(exc)
-            log.exception("[DEPLOY] Railway failed: %s", exc)
+            log.warning("[DEPLOY] Railway failed (%s) — trying Vercel fallback", exc)
+
+    if not url and vercel_available():
+        try:
+            log.info("[DEPLOY] Deploying to Vercel (fallback) | venture=%s", venture_id)
+            url = await deploy_to_vercel(venture_id, build_dir)
+            log.info("[DEPLOY] ✓ Vercel | url=%s", url)
+        except Exception as exc:
+            last_err = str(exc)
+            log.exception("[DEPLOY] Vercel fallback also failed: %s", exc)
 
     if not url:
         raise HTTPException(
             500,
             f"Deployment failed.\nLast error: {last_err}\n\n"
-            "Set VERCEL_TOKEN in Railway Variables:\n"
-            "  1. vercel.com → click avatar → Account Settings → Tokens → Create Token\n"
-            "  2. Add VERCEL_TOKEN=<token> in Railway → your service → Variables\n"
-            "  3. Click Launch Product again"
+            "RAILWAY_TOKEN required (User Account Token — NOT a Project Token):\n"
+            "  1. railway.app → click your avatar → Account Settings → Tokens\n"
+            "  2. New Token → name 'AI Squadron' → Full Access → Create\n"
+            "  3. Add RAILWAY_TOKEN=<token> in Railway → your service → Variables\n"
+            "  4. Click Launch Product again"
         )
 
     # ── Persist live_url to Supabase ─────────────────────────────────────────
