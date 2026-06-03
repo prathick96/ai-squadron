@@ -265,39 +265,113 @@ function ActiveRunCard({ run, onRefresh }: { run: PipelineRun; onRefresh: () => 
         </div>
       )}
 
-      {/* Build actions — shown for PRODUCT runs that completed or have build artifacts */}
+      {/* ── Product actions (COMPLETED or MANUAL_REVIEW PRODUCT runs) ─────── */}
       {run.department === "PRODUCT" && (run.status === "COMPLETED" || run.status === "MANUAL_REVIEW") && (
-        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-          <a
-            href={`/api/builds/${run.venture_id}`}
-            target="_blank"
-            rel="noreferrer"
-            style={{
-              fontSize: "0.7rem", padding: "3px 10px", borderRadius: 4,
-              border: "1px solid #336", background: "#0a0a1a", color: "#88f",
-              textDecoration: "none", fontFamily: "monospace",
-            }}
-          >
-            📁 View Build Files
-          </a>
-          <a
-            href={`/api/builds/${run.venture_id}/download`}
-            style={{
-              fontSize: "0.7rem", padding: "3px 10px", borderRadius: 4,
-              border: "1px solid #336", background: "#0a0a1a", color: "#88f",
-              textDecoration: "none", fontFamily: "monospace",
-            }}
-          >
-            ⬇ Download ZIP
-          </a>
-          <span style={{
-            fontSize: "0.65rem", color: "var(--muted)", alignSelf: "center",
-            fontFamily: "monospace",
-          }}>
-            Local: cd builds/{run.venture_id} &amp;&amp; npm install &amp;&amp; npm run dev
+        <ProductActions ventureId={run.venture_id} onRefresh={onRefresh} />
+      )}
+    </div>
+  );
+}
+
+/** Separate component so it can hold its own deploy state without re-rendering the whole card */
+function ProductActions({ ventureId, onRefresh }: { ventureId: string; onRefresh: () => void }) {
+  const [deploying, setDeploying] = useState(false);
+  const [liveUrl,   setLiveUrl]   = useState<string | null>(null);
+  const [deployErr, setDeployErr] = useState<string | null>(null);
+
+  async function launchProduct() {
+    setDeploying(true);
+    setDeployErr(null);
+    try {
+      const res = await fetch(`/api/ventures/${encodeURIComponent(ventureId)}/deploy`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail ?? `Deploy failed (${res.status})`);
+      setLiveUrl(data.url);
+      onRefresh();   // refresh ventures list so live_url appears in portfolio
+    } catch (e) {
+      setDeployErr(e instanceof Error ? e.message : "Deploy failed");
+    } finally {
+      setDeploying(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+
+      {/* Launch Product button — prominent green CTA */}
+      {liveUrl ? (
+        <a
+          href={liveUrl}
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 8,
+            padding: "8px 18px", borderRadius: 6, textDecoration: "none",
+            background: "linear-gradient(135deg,#166534,#14532d)",
+            border: "1px solid #4ade80", color: "#4ade80",
+            fontWeight: 700, fontSize: "0.82rem", fontFamily: "monospace",
+            boxShadow: "0 0 12px rgba(74,222,128,0.2)",
+          }}
+        >
+          🟢 Launch Product →
+          <span style={{ fontSize: "0.7rem", fontWeight: 400, color: "#86efac", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {liveUrl}
           </span>
+        </a>
+      ) : (
+        <button
+          onClick={launchProduct}
+          disabled={deploying}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 8,
+            padding: "8px 18px", borderRadius: 6, border: "none",
+            background: deploying
+              ? "#1a1a2e"
+              : "linear-gradient(135deg,#7c3aed,#6d28d9)",
+            color: deploying ? "var(--muted)" : "#fff",
+            fontWeight: 700, fontSize: "0.82rem", fontFamily: "monospace",
+            cursor: deploying ? "not-allowed" : "pointer",
+            alignSelf: "flex-start",
+            boxShadow: deploying ? "none" : "0 0 16px rgba(124,58,237,0.3)",
+            transition: "all 0.2s",
+          }}
+        >
+          {deploying ? (
+            <>⏳ Deploying to Railway…</>
+          ) : (
+            <>🚀 Launch Product</>
+          )}
+        </button>
+      )}
+
+      {deployErr && (
+        <div style={{ fontSize: "0.72rem", color: "#f66", fontFamily: "monospace" }}>
+          ⚠ {deployErr}
         </div>
       )}
+
+      {/* Secondary: build inspection links */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <a
+          href={`/api/builds/${ventureId}`}
+          target="_blank"
+          rel="noreferrer"
+          style={{ fontSize: "0.68rem", padding: "2px 8px", borderRadius: 4, border: "1px solid #1e1e3a", background: "#0a0a1a", color: "#64748b", textDecoration: "none", fontFamily: "monospace" }}
+        >
+          📁 Build files
+        </a>
+        <a
+          href={`/api/builds/${ventureId}/download`}
+          style={{ fontSize: "0.68rem", padding: "2px 8px", borderRadius: 4, border: "1px solid #1e1e3a", background: "#0a0a1a", color: "#64748b", textDecoration: "none", fontFamily: "monospace" }}
+        >
+          ⬇ Download ZIP
+        </a>
+        <span style={{ fontSize: "0.62rem", color: "#334155", fontFamily: "monospace" }}>
+          local: npm install &amp;&amp; npm run dev
+        </span>
+      </div>
     </div>
   );
 }

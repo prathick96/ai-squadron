@@ -238,6 +238,14 @@ def _revenue_payload() -> tuple[dict, str]:
 # Dashboard endpoints (unchanged from Week 4)
 # ---------------------------------------------------------------------------
 
+def _railway_ok() -> bool:
+    try:
+        from packages.tools.railway_client import railway_available
+        return railway_available()
+    except Exception:
+        return False
+
+
 @app.get("/api/health")
 def health() -> dict:
     # Wrapped in try/except: a broken optional import must never turn the
@@ -252,11 +260,12 @@ def health() -> dict:
     except Exception:
         active = 0
     return {
-        "status": "ok",
-        "service": "command-center-api",
-        "version": "0.5.0",
-        "storage": storage,
+        "status":               "ok",
+        "service":              "command-center-api",
+        "version":              "0.5.0",
+        "storage":              storage,
         "active_pipeline_runs": active,
+        "railway_available":    _railway_ok(),
     }
 
 
@@ -647,6 +656,77 @@ def _cancel_subscription(data: dict) -> None:
         }).eq("paddle_subscription_id", data.get("id")).execute()
     except Exception as exc:
         log.warning("[WEBHOOK] cancel_subscription failed: %s", exc)
+
+
+@app.post("/api/ventures/{venture_id}/deploy")
+async def deploy_venture(venture_id: str) -> dict:
+    """
+    Deploy (or redeploy) a venture's built code to Railway.
+    Requires RAILWAY_TOKEN or RAILWAY_API_TOKEN in env.
+
+    Flow:
+      1. Check build files exist on disk (fast path — same deployment)
+      2. If disk is empty, restore from Supabase build_artifacts table
+      3. Call deploy_to_railway() → real HTTPS URL from Railway
+      4. Update ventures.live_url + status='LIVE' in Supabase
+      5. Return {ok, url, venture_id}
+    """
+    from packages.tools.railway_client import deploy_to_railway, railway_available
+    from packages.db.pipeline import fetch_build_artifact
+    import os as _os
+
+    if not railway_available():
+        raise HTTPException(
+            400,
+            "RAILWAY_TOKEN (or RAILWAY_API_TOKEN) is not configured. "
+            "Add it in Railway → your service → Variables."
+        )
+
+    builds_root = Path(_os.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
+    build_dir   = builds_root / venture_id
+
+    # ── Restore from Supabase if disk was wiped by redeploy ────────────────
+    if not build_dir.is_dir():
+        log.info("[DEPLOY] Build not on disk, fetching from Supabase | venture=%s", venture_id)
+        artifact = fetch_build_artifact(venture_id)
+        if not artifact or not artifact.get("files"):
+            raise HTTPException(
+                404,
+                f"No build found for {venture_id}. "
+                "Run a PRODUCT pipeline first to generate the code."
+            )
+        build_dir.mkdir(parents=True, exist_ok=True)
+        files_restored = 0
+        for f in artifact["files"]:
+            fpath = build_dir / f.get("path", "")
+            if fpath.name:
+                fpath.parent.mkdir(parents=True, exist_ok=True)
+                fpath.write_text(f.get("content", ""), encoding="utf-8")
+                files_restored += 1
+        log.info("[DEPLOY] Restored %d files from Supabase for %s", files_restored, venture_id)
+
+    # ── Deploy to Railway ────────────────────────────────────────────────────
+    try:
+        log.info("[DEPLOY] Deploying %s to Railway | dir=%s", venture_id, build_dir)
+        url = await deploy_to_railway(venture_id, build_dir)
+        log.info("[DEPLOY] ✓ Live | venture=%s url=%s", venture_id, url)
+    except Exception as exc:
+        log.exception("[DEPLOY] Railway deploy failed for %s: %s", venture_id, exc)
+        raise HTTPException(500, f"Railway deployment failed: {exc}")
+
+    # ── Persist live_url to Supabase ─────────────────────────────────────────
+    try:
+        from packages.db.client import get_db, is_supabase_connected
+        if is_supabase_connected():
+            get_db().table("ventures").update({
+                "live_url": url,
+                "status":   "LIVE",
+            }).eq("venture_id", venture_id).execute()
+            log.info("[DEPLOY] ventures.live_url updated | venture=%s", venture_id)
+    except Exception as exc:
+        log.warning("[DEPLOY] Could not update ventures table: %s", exc)
+
+    return {"ok": True, "url": url, "venture_id": venture_id}
 
 
 @app.get("/api/products")

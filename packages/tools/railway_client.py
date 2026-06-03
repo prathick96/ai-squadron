@@ -46,9 +46,14 @@ _EXCLUDE_DIRS = {"node_modules", ".git", ".cache", "dist", "__pycache__"}
 # Public helpers
 # ---------------------------------------------------------------------------
 
+def _get_railway_token() -> str:
+    """Accept RAILWAY_TOKEN or RAILWAY_API_TOKEN — whichever is set."""
+    return os.getenv("RAILWAY_TOKEN", "") or os.getenv("RAILWAY_API_TOKEN", "")
+
+
 def railway_available() -> bool:
-    """True when RAILWAY_TOKEN is configured and looks like a real token."""
-    token = os.getenv("RAILWAY_TOKEN", "")
+    """True when RAILWAY_TOKEN (or RAILWAY_API_TOKEN) is configured."""
+    token = _get_railway_token()
     return bool(token and len(token) > 10 and not token.startswith("your_"))
 
 
@@ -87,7 +92,7 @@ async def deploy_to_railway(venture_id: str, build_dir: Path) -> str:
 # ---------------------------------------------------------------------------
 
 def _token() -> str:
-    return os.getenv("RAILWAY_TOKEN", "")
+    return _get_railway_token()
 
 
 def _auth_headers(token: str) -> dict:
