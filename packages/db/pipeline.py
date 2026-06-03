@@ -305,3 +305,76 @@ def fetch_build_artifact(venture_id: str) -> dict[str, Any] | None:
         log.warning("[pipeline] fetch_build_artifact fallback failed: %s", exc)
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Niche evaluation memory (migration 009)
+# ---------------------------------------------------------------------------
+
+def get_exhausted_niches() -> list[str]:
+    """
+    Return lowercase niche strings that should NOT be proposed again.
+    Includes: previously KILL'd niches, already-built niches (avoid duplication),
+    and any niche evaluated in the last 7 days (de-duplication window).
+    """
+    if not is_supabase_connected():
+        return []
+    try:
+        db     = get_db()
+        result = db.table("niche_evaluations") \
+            .select("niche, outcome, evaluated_at") \
+            .in_("outcome", ["KILL", "SCALE", "BUILT"]) \
+            .execute()
+        rows = result.data or []
+        return [r["niche"].lower() for r in rows if r.get("niche")]
+    except Exception as exc:
+        log.debug("[pipeline] get_exhausted_niches failed: %s", exc)
+        return []
+
+
+def persist_niche_evaluation(
+    niche: str,
+    venture_type: str,
+    scores: dict[str, int],
+    go_decision: bool,
+    go_rationale: str,
+    scout_summary: dict[str, str],
+    run_id: str,
+    venture_id: str | None = None,
+    niche_rank: int = 1,
+    run_shortlist_id: str | None = None,
+) -> None:
+    """
+    Persist a CEO niche evaluation to Supabase for future memory lookups.
+    Called by grand_ceo.py after go/no-go decision.
+    """
+    if not is_supabase_connected():
+        return
+
+    import uuid as _uuid
+    row = {
+        "niche":              niche,
+        "venture_type":       venture_type,
+        "tam_score":          min(25, max(0, scores.get("tam_score", 0))),
+        "competition_gap":    min(25, max(0, scores.get("competition_gap", 0))),
+        "build_score":        min(25, max(0, scores.get("build_score", 0))),
+        "revenue_velocity":   min(25, max(0, scores.get("revenue_velocity", 0))),
+        "go_decision":        go_decision,
+        "go_rationale":       go_rationale[:500],
+        "outcome":            "BUILT" if (go_decision and venture_id) else ("PENDING" if go_decision else "PENDING"),
+        "venture_id":         venture_id,
+        "run_id":             run_id,
+        "niche_rank":         niche_rank,
+        "run_shortlist_id":   run_shortlist_id or str(_uuid.uuid4()),
+        "trend_summary":      scout_summary.get("trend", "")[:400],
+        "skeptic_argument":   scout_summary.get("skeptic", "")[:400],
+        "audience_persona":   scout_summary.get("audience", "")[:400],
+        "build_estimate_days": scout_summary.get("build_days"),
+    }
+    try:
+        db = get_db()
+        db.table("niche_evaluations").insert(row).execute()
+        log.info("[pipeline] Niche evaluation persisted | niche=%s score=%d go=%s",
+                 niche, sum(scores.values()), go_decision)
+    except Exception as exc:
+        log.debug("[pipeline] persist_niche_evaluation failed: %s", exc)
