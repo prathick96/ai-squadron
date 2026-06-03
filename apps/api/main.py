@@ -661,31 +661,27 @@ def _cancel_subscription(data: dict) -> None:
 @app.post("/api/ventures/{venture_id}/deploy")
 async def deploy_venture(venture_id: str) -> dict:
     """
-    Deploy (or redeploy) a venture's built code to Railway.
-    Requires RAILWAY_TOKEN or RAILWAY_API_TOKEN in env.
+    Deploy a venture's built React app to Railway OR Netlify.
 
-    Flow:
-      1. Check build files exist on disk (fast path — same deployment)
-      2. If disk is empty, restore from Supabase build_artifacts table
-      3. Call deploy_to_railway() → real HTTPS URL from Railway
-      4. Update ventures.live_url + status='LIVE' in Supabase
-      5. Return {ok, url, venture_id}
+    Provider priority:
+      1. Netlify  — if NETLIFY_TOKEN is set. Simple zip-upload API, no GraphQL.
+                    Best choice: free tier, no project/env ID needed.
+      2. Railway  — if RAILWAY_TOKEN/RAILWAY_API_TOKEN is set.
+                    Requires GraphQL API access (sometimes blocked by free tier / token type).
+
+    Set ONE of these in Railway Variables:
+      NETLIFY_TOKEN=<from app.netlify.com → User Settings → Applications>
+      RAILWAY_TOKEN=<from railway.app → Account avatar → Account Settings → Tokens>
     """
-    from packages.tools.railway_client import deploy_to_railway, railway_available
     from packages.db.pipeline import fetch_build_artifact
+    from packages.tools.railway_client import deploy_to_railway, railway_available
+    from packages.tools.netlify_client import deploy_to_netlify, netlify_available
     import os as _os
-
-    if not railway_available():
-        raise HTTPException(
-            400,
-            "RAILWAY_TOKEN (or RAILWAY_API_TOKEN) is not configured. "
-            "Add it in Railway → your service → Variables."
-        )
 
     builds_root = Path(_os.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
     build_dir   = builds_root / venture_id
 
-    # ── Restore from Supabase if disk was wiped by redeploy ────────────────
+    # ── Restore build from Supabase if disk was wiped ──────────────────────
     if not build_dir.is_dir():
         log.info("[DEPLOY] Build not on disk, fetching from Supabase | venture=%s", venture_id)
         artifact = fetch_build_artifact(venture_id)
@@ -693,26 +689,79 @@ async def deploy_venture(venture_id: str) -> dict:
             raise HTTPException(
                 404,
                 f"No build found for {venture_id}. "
-                "Run a PRODUCT pipeline first to generate the code."
+                "Run a PRODUCT pipeline first."
             )
         build_dir.mkdir(parents=True, exist_ok=True)
-        files_restored = 0
         for f in artifact["files"]:
             fpath = build_dir / f.get("path", "")
             if fpath.name:
                 fpath.parent.mkdir(parents=True, exist_ok=True)
                 fpath.write_text(f.get("content", ""), encoding="utf-8")
-                files_restored += 1
-        log.info("[DEPLOY] Restored %d files from Supabase for %s", files_restored, venture_id)
+        log.info("[DEPLOY] Restored files from Supabase for %s", venture_id)
 
-    # ── Deploy to Railway ────────────────────────────────────────────────────
-    try:
-        log.info("[DEPLOY] Deploying %s to Railway | dir=%s", venture_id, build_dir)
-        url = await deploy_to_railway(venture_id, build_dir)
-        log.info("[DEPLOY] ✓ Live | venture=%s url=%s", venture_id, url)
-    except Exception as exc:
-        log.exception("[DEPLOY] Railway deploy failed for %s: %s", venture_id, exc)
-        raise HTTPException(500, f"Railway deployment failed: {exc}")
+    # ── Also run npm install + vite build if dist/ is missing ──────────────
+    dist_dir = build_dir / "dist"
+    if not dist_dir.is_dir():
+        import asyncio
+        import sys
+        npm = "npm.cmd" if sys.platform == "win32" else "npm"
+        log.info("[DEPLOY] Building dist/ for %s...", venture_id)
+        try:
+            npm_cache = str(builds_root.parent / ".npm-cache")
+            proc = await asyncio.create_subprocess_exec(
+                npm, "install", "--no-audit", "--no-fund",
+                "--cache", npm_cache, "--legacy-peer-deps",
+                cwd=str(build_dir), stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=300)
+            proc2 = await asyncio.create_subprocess_exec(
+                npm, "run", "build", cwd=str(build_dir),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(proc2.communicate(), timeout=300)
+            if proc2.returncode != 0:
+                raise RuntimeError(f"vite build failed: {stderr.decode(errors='replace')[-300:]}")
+            log.info("[DEPLOY] dist/ built successfully for %s", venture_id)
+        except Exception as exc:
+            raise HTTPException(500, f"Build step failed: {exc}")
+
+    # ── Deploy — Netlify first (simpler), Railway as fallback ───────────────
+    pass  # provider tracked via log
+    url       = ""
+    last_err  = ""
+
+    if netlify_available():
+        try:
+            log.info("[DEPLOY] Trying Netlify for %s", venture_id)
+            url      = await deploy_to_netlify(venture_id, build_dir)
+
+            log.info("[DEPLOY] ✓ Netlify | url=%s", url)
+        except Exception as exc:
+            last_err = str(exc)
+            log.warning("[DEPLOY] Netlify failed (%s) — trying Railway", exc)
+
+    if not url and railway_available():
+        try:
+            log.info("[DEPLOY] Trying Railway for %s", venture_id)
+            url      = await deploy_to_railway(venture_id, build_dir)
+
+            log.info("[DEPLOY] ✓ Railway | url=%s", url)
+        except Exception as exc:
+            last_err = str(exc)
+            log.exception("[DEPLOY] Railway failed: %s", exc)
+
+    if not url:
+        raise HTTPException(
+            500,
+            f"Deployment failed on all providers.\n"
+            f"Last error: {last_err}\n\n"
+            "To fix:\n"
+            "  Option A (recommended): Set NETLIFY_TOKEN in Railway Variables\n"
+            "    → Get token from app.netlify.com → User Settings → Applications → New access token\n"
+            "  Option B: Set RAILWAY_TOKEN (Account Settings token, not Project Token)\n"
+            "    → Get from railway.app → Account avatar → Account Settings → Tokens"
+        )
 
     # ── Persist live_url to Supabase ─────────────────────────────────────────
     try:
