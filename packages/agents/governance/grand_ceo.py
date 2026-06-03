@@ -341,14 +341,21 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
         brief_payload.niche, total_score, brief_payload.go_decision, len(shortlist),
     )
 
-    venture_brief: VentureBrief = brief_data  # type: ignore[assignment]
+    # Strip niche_shortlist from venture_brief — downstream agents (Engineering,
+    # QA, Marketing SEO, etc.) don't need it and it bloats their prompts by 6–12KB,
+    # causing max_tokens truncation (the exact failure mode for ven_7c1a5960).
+    # niche_shortlist stays in state as its own key for the memory persister.
+    venture_brief: VentureBrief = {
+        k: v for k, v in brief_data.items() if k != "niche_shortlist"
+    }  # type: ignore[assignment]
+
     new_state = update_stage(state, "PRODUCT_VP_NODE")
     return append_event(
         {**new_state,
          "venture_id":     new_venture_id,
          "venture_brief":  venture_brief,
          "department":     "PRODUCT",
-         "niche_shortlist": shortlist,
+         "niche_shortlist": shortlist,   # kept separately — only CEO + memory use this
          },
         event.model_dump(),
     )

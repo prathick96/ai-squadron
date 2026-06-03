@@ -84,8 +84,18 @@ async def marketing_seo_node(state: AgentState) -> AgentState:
     log.info("[MARKETING_SEO_NODE] Building launch plan | venture=%s", venture_id)
     log_agent_event(run_id, venture_id, "MARKETING_SEO", "RUNNING", "30-day marketing plan")
 
+    # Pass only the fields marketing SEO actually needs — not the full brief.
+    # venture_brief can include niche_shortlist or other large fields that
+    # bloat the prompt and cause truncation (ven_7c1a5960 failure pattern).
+    brief_summary = {
+        "niche":                  brief.get("niche", ""),
+        "target_audience":        brief.get("target_audience", ""),
+        "recommended_monetization": brief.get("recommended_monetization", []),
+        "content_angles":         brief.get("content_angles", []),
+        "go_rationale":           brief.get("go_rationale", "")[:200],
+    }
     user_prompt = _TEMPLATE.format(
-        venture_brief=json.dumps(brief, indent=2),
+        venture_brief=json.dumps(brief_summary, indent=2),
         deployment_url=url,
         product_type=spec.get("product_type", "MICRO_SAAS"),
         venture_id=venture_id,
