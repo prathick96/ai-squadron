@@ -127,6 +127,9 @@ async def _poll_netlify_deploy(client: httpx.AsyncClient, deploy_id: str) -> str
             if state == "ready" and url:
                 # Always return canonical site URL, never the deploy-preview URL
                 canonical = data.get("ssl_url") or url
+                # CDN propagation delay — new sites get 429 for ~30s after "ready"
+                log.info("[NETLIFY] Deploy ready — waiting 20s for CDN propagation")
+                await asyncio.sleep(20)
                 return canonical
             if state in ("error", "failed"):
                 raise RuntimeError(f"Netlify deploy {deploy_id} failed: {data.get('error_message')}")
