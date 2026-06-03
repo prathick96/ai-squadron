@@ -692,12 +692,24 @@ async def deploy_venture(venture_id: str) -> dict:
                 "Run a PRODUCT pipeline first."
             )
         build_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write scaffold files first (package.json, vite.config.ts, tsconfig, etc.)
+        # These are NOT in Supabase — they come from the hardcoded scaffold dict.
+        from packages.agents.product.engineering_team import _SCAFFOLD
+        for rel_path, content in _SCAFFOLD.items():
+            dest = build_dir / rel_path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content, encoding="utf-8")
+        log.info("[DEPLOY] Scaffold files written for %s (%d files)", venture_id, len(_SCAFFOLD))
+
+        # Then restore the LLM-generated source files on top
         for f in artifact["files"]:
             fpath = build_dir / f.get("path", "")
             if fpath.name:
                 fpath.parent.mkdir(parents=True, exist_ok=True)
                 fpath.write_text(f.get("content", ""), encoding="utf-8")
-        log.info("[DEPLOY] Restored files from Supabase for %s", venture_id)
+        log.info("[DEPLOY] Restored %d LLM files from Supabase for %s",
+                 len(artifact["files"]), venture_id)
 
     # ── Also run npm install + vite build if dist/ is missing ──────────────
     dist_dir = build_dir / "dist"
