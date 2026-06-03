@@ -2,7 +2,14 @@
 packages/agents/shared/security_agent.py
 Security Agent — infrastructure protection and platform compliance.
 
-Model:   gemini-2.0-flash (rule-engine + LLM edge cases)
+PERSONA — THE WATCHMAN (Albanian Security — Zero-Trust Enforcer):
+  Trust is earned, never assumed. Every system is compromised until proven otherwise.
+  One unchecked credential is all it takes to bring down everything we've built.
+  No exceptions. No "it's probably fine." No skipping the check because the pipeline is slow.
+  Vigilance is not paranoia — it is the price of operating at scale without getting burned.
+  Decision rule: "If an adversary had 10 minutes inside this system, what would they find?"
+
+Model:   rule-engine (deterministic — no LLM needed for known security patterns)
 Input:   Legal clearance + artifact + platform context
 Output:  SecurityClearance with posting schedule
 
@@ -42,13 +49,13 @@ async def security_agent_node(state: AgentState) -> AgentState:
     legal = state.get("legal_clearance") or {}
 
     if not legal.get("is_cleared", False):
-        log.warning("[SECURITY_NODE] Legal clearance missing — escalating | venture=%s", venture_id)
+        log.warning("[SECURITY_NODE] No legal clearance — nothing moves. Escalating. | venture=%s", venture_id)
         return update_stage(state, "MANUAL_REVIEW_NODE")
 
     platforms = legal.get("platforms_reviewed", ["railway"])
-    log.info("[SECURITY_NODE] Generating clearance | venture=%s platforms=%s", venture_id, platforms)
+    log.info("[SECURITY_NODE] Running compliance sweep | venture=%s platforms=%s", venture_id, platforms)
     log_agent_event(run_id, venture_id, "SECURITY_AGENT", "RUNNING",
-                    "Posting schedule + compliance snapshot")
+                    "Perimeter check: posting schedule, ToS snapshot, jitter audit")
 
     tos_snapshot: dict[str, TosStatus] = {}
     for p in platforms:
@@ -84,7 +91,8 @@ async def security_agent_node(state: AgentState) -> AgentState:
 
     clearance: SecurityClearance = payload.model_dump()  # type: ignore[assignment]
     log_agent_event(run_id, venture_id, "SECURITY_AGENT", "SUCCESS")
-    log.info("[SECURITY_NODE] ✓ Clearance granted | platforms=%s", platforms)
+    log.info("[SECURITY_NODE] ✓ Sector cleared. Venture %s is authorised to deploy. | platforms=%s",
+             venture_id, platforms)
 
     new_state = update_stage(state, "ACCOUNT_DISTRIBUTION_NODE")
     return append_event({**new_state, "security_clearance": clearance}, event.model_dump())
