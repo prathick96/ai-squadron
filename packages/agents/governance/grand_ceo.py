@@ -181,8 +181,8 @@ RETURN ONLY this JSON (no markdown, first char must be {{):
   "target_region": ["US", "CA", "AU", "IN"],
   "target_audience": "Specific named persona and their exact pain point",
   "rpm_estimate_usd": 0.0,
-  "competition_score": 0.0,
-  "feasibility_score": 0.0,
+  "competition_score": 0.0,  (0.0–1.0 scale: 0=no competition, 1=saturated)
+  "feasibility_score": 0.0,  (0.0–1.0 scale: 0=impossible, 1=trivially easy)
   "tam_usd_millions": 0.0,
   "top_competitors": [{{"name": "...", "weakness": "specific weakness", "moat_gap": "specific gap we exploit"}}],
   "recommended_monetization": ["freemium", "subscription", "one_time"],
@@ -239,6 +239,17 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
         log.error("[CEO_NODE] LLM call failed: %s", exc)
         log_agent_event(run_id, venture_id, "GRAND_CEO", "FAILED", error_detail=str(exc))
         return {**state, "last_error": str(exc)}
+
+    # ── Normalise 0-25 rubric scores → 0.0-1.0 range for VentureBriefPayload ──
+    # The CEO scoring rubric uses 0-25 per dimension, but the schema expects
+    # competition_score and feasibility_score as floats in [0.0, 1.0].
+    for field in ("competition_score", "feasibility_score"):
+        raw = brief_data.get(field, 0.5)
+        if isinstance(raw, (int, float)):
+            if raw > 1.0:
+                brief_data[field] = round(min(1.0, float(raw) / 25.0), 3)
+            elif raw < 0.0:
+                brief_data[field] = 0.0
 
     # ── Enforce PRODUCT-only: override any MEDIA_CHANNEL suggestion ──────────
     if brief_data.get("venture_type") == "MEDIA_CHANNEL":
