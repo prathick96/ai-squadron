@@ -70,21 +70,32 @@ async def deploy_to_railway(venture_id: str, build_dir: Path) -> str:
     """
     token        = _get_railway_token()
     service_name = venture_id[:30]
-    forced_pid   = os.getenv("RAILWAY_PROJECT_ID", "")
+    # Railway auto-injects these into every container at runtime.
+    # If both are present we skip all project-level GraphQL (the only queries
+    # that fail with a Project Token). User Token only needed when neither is set.
+    forced_pid = os.getenv("RAILWAY_PROJECT_ID", "")
+    forced_env = os.getenv("RAILWAY_ENVIRONMENT_ID", "")
 
     async with httpx.AsyncClient(timeout=45.0, verify=_ssl_verify()) as client:
-        # 1. Determine project + environment
-        #    - If RAILWAY_PROJECT_ID is set: use it directly (project token works here)
-        #    - Otherwise: try me-based auto-discovery (requires User Token)
-        if forced_pid:
-            log.info("[RAILWAY] Using RAILWAY_PROJECT_ID=%s", forced_pid[:8])
-            data   = await _gql(client, token, _Q_PROJECT_BY_ID, {"id": forced_pid})
-            envs   = _unwrap_edges(data["project"]["environments"])
+        # 1. Project + environment — 3-tier lookup
+        if forced_pid and forced_env:
+            # Best path: both auto-injected by Railway OR set manually.
+            # Zero project-level GraphQL needed — works with Project Tokens.
+            project_id, env_id = forced_pid, forced_env
+            log.info("[RAILWAY] Auto-injected project=%s env=%s",
+                     project_id[:8], env_id[:8])
+        elif forced_pid:
+            # Have project ID — one small query to resolve environment.
+            data = await _gql(client, token, _Q_PROJECT_BY_ID, {"id": forced_pid})
+            envs = _unwrap_edges(data["project"]["environments"])
             project_id, env_id = forced_pid, _pick_prod_env(envs)
+            log.info("[RAILWAY] project=%s env=%s (env resolved)", project_id[:8], env_id[:8])
         else:
-            log.info("[RAILWAY] No RAILWAY_PROJECT_ID set — using User Token auto-discovery")
+            # No project ID — requires User Token (Account Settings → Tokens).
+            # Project Tokens cannot query 'me { projects }' and will fail here.
+            log.info("[RAILWAY] No RAILWAY_PROJECT_ID — User Token auto-discovery")
             project_id, env_id = await _get_or_create_project(client, token, "ai-squadron")
-        log.info("[RAILWAY] project=%s env=%s", project_id[:8], env_id[:8])
+            log.info("[RAILWAY] project=%s env=%s", project_id[:8], env_id[:8])
 
         # 2. Service
         service_id = await _get_or_create_service(client, token, project_id, service_name)
