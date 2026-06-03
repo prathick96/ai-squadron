@@ -188,7 +188,7 @@ async def test_qa_technical_includes_playwright_smoke_in_checks(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_qa_technical_skips_playwright_when_vite_fails(tmp_path, monkeypatch):
-    """When vite build fails, playwright_smoke is skipped (not executed on broken dist/)."""
+    """When vite build fails in blocking mode, vite_build is a failure and playwright is skipped."""
     monkeypatch.delenv("SUPABASE_URL", raising=False)
 
     build_dir = tmp_path / "venture_test"
@@ -196,6 +196,9 @@ async def test_qa_technical_skips_playwright_when_vite_fails(tmp_path, monkeypat
     # No package.json → npm run build will fail
 
     from packages.agents.product import qa_technical
+
+    # Explicitly enable blocking mode — default is warning-only (QA_REQUIRE_VITE_BUILD=false).
+    monkeypatch.setattr(qa_technical, "_REQUIRE_VITE_BUILD", True)
 
     fake_build = {
         "build_path": str(build_dir),
@@ -205,11 +208,9 @@ async def test_qa_technical_skips_playwright_when_vite_fails(tmp_path, monkeypat
     with patch("packages.tools.playwright_runner.playwright_available", return_value=True):
         checks_run, failures, updates = await qa_technical._validate_build(fake_build)
 
-    # Phase 2 default: QA_REQUIRE_VITE_BUILD=true — vite_build failure IS a blocker.
-    # The key behaviour under test is that Playwright is skipped when dist/ was
-    # never produced (regardless of whether vite_build blocks or warns).
+    # With _REQUIRE_VITE_BUILD=True explicitly set, vite_build failure IS a blocker.
     assert "vite_build" in failures, (
-        "vite_build should be a blocker with QA_REQUIRE_VITE_BUILD=true (Phase 2 default)"
+        "vite_build should be a blocker when _REQUIRE_VITE_BUILD=True"
     )
     # Playwright should indicate skip because dist/ was never produced.
     assert any("skip" in e.lower() or "did not produce" in e.lower()

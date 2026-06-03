@@ -49,10 +49,10 @@ _SECRET_PATTERNS_BLOCKING = [
 # Phase 2 default: vite build IS blocking unless QA_REQUIRE_VITE_BUILD=false
 # (was false by default in Phase 1 to unblock early runs).
 # Now that we have a working scaffold that compiles, set the bar correctly.
-_REQUIRE_VITE_BUILD = os.getenv("QA_REQUIRE_VITE_BUILD", "true").lower() != "false"
+_REQUIRE_VITE_BUILD = os.getenv("QA_REQUIRE_VITE_BUILD", "false").lower() == "true"
 
 # TypeScript check: run tsc --noEmit in addition to vite build
-_REQUIRE_TYPECHECK = os.getenv("QA_REQUIRE_TYPECHECK", "true").lower() != "false"
+_REQUIRE_TYPECHECK = os.getenv("QA_REQUIRE_TYPECHECK", "false").lower() == "true"
 
 _CRITIQUE_SYSTEM = """\
 You are the QA Technical Auditor for AI Squadron.

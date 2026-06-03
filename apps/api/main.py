@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+import time as _time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -183,18 +184,51 @@ async def _run_pipeline_background(state: dict, department: str, user_id: str | 
 
 
 def _try_supabase_agents() -> list[dict] | None:
+    """
+    Build the agent health grid with REAL success_ratio computed server-side.
+
+    The NaN% bug: the frontend received `success_ratio: undefined` because the
+    raw agent_logs rows don't have an aggregated ratio field.  We now compute it
+    here: for each agent, count SUCCESS vs total over the last 20 runs.
+    """
     try:
         from packages.db.pipeline import fetch_recent_agent_logs
-        rows = fetch_recent_agent_logs(50)
+        rows = fetch_recent_agent_logs(200)   # more rows so we can compute ratios
         if not rows:
             return None
-        # Rows are ordered newest-first; keep only the most recent entry per agent_name.
-        seen: dict[str, dict] = {}
+
+        # Aggregate per agent_name over the last 20 runs each
+        from collections import defaultdict
+        agent_runs: dict[str, list[str]] = defaultdict(list)
+        agent_latest: dict[str, dict]    = {}
+
         for row in rows:
-            name = row.get("agent_name", "")
-            if name and name not in seen:
-                seen[name] = row
-        return list(seen.values()) if seen else None
+            name   = row.get("agent_name", "")
+            status = row.get("status", "")
+            if not name:
+                continue
+            if name not in agent_latest:
+                agent_latest[name] = row   # newest row first
+            if len(agent_runs[name]) < 20:
+                agent_runs[name].append(status)
+
+        result = []
+        for name, latest in agent_latest.items():
+            statuses     = agent_runs[name]
+            total        = len(statuses)
+            successes    = sum(1 for s in statuses if s == "SUCCESS")
+            ratio        = round(successes / total, 3) if total > 0 else 0.0
+
+            result.append({
+                **latest,
+                "success_ratio":  ratio,        # 0.0–1.0  — frontend multiplies by 100
+                "tokens_used":    latest.get("tokens_used", 0) or 0,
+                "latency_ms":     latest.get("latency_ms", 0)  or 0,
+                "retry_count":    latest.get("retry_count", 0) or 0,
+                "current_task":   latest.get("current_task", "") or "",
+            })
+
+        return result or None
     except Exception as exc:
         log.debug("Supabase agent_logs unavailable: %s", exc)
     return None
@@ -232,6 +266,27 @@ def _revenue_payload() -> tuple[dict, str]:
     if live:
         return live, "ledger"
     return revenue_summary(), "mock"
+
+
+# ---------------------------------------------------------------------------
+# Simple TTL cache — avoids hammering Supabase on every 8s poll tick.
+# Heavy endpoints (confidence, portfolio, trends) are cached for 30 seconds.
+# The registry (live runs) is never cached — it's in-memory and instant.
+# ---------------------------------------------------------------------------
+_cache: dict[str, tuple[float, object]] = {}
+_CACHE_TTL = 30.0   # seconds
+
+
+def _cached(key: str, ttl: float, fn):
+    """Return cached value or recompute. Thread-safe via GIL for CPython."""
+    now = _time.monotonic()
+    if key in _cache:
+        ts, val = _cache[key]
+        if now - ts < ttl:
+            return val
+    val = fn()
+    _cache[key] = (now, val)
+    return val
 
 
 # ---------------------------------------------------------------------------
@@ -309,21 +364,23 @@ def get_revenue_plan() -> dict:
 
 @app.get("/api/confidence")
 def get_confidence() -> dict:
-    try:
-        report = live_confidence()
-        return {**report, "source": "computed"}
-    except Exception as exc:
-        log.warning("confidence fallback: %s", exc)
-        return {
-            "confidence_score": 0,
-            "confidence_tier": "LOW",
-            "forecast_p10_mrr_12mo": 0,
-            "forecast_p50_mrr_12mo": 300,
-            "forecast_p90_mrr_12mo": 3000,
-            "leading_indicators": {},
-            "recommended_actions": ["Run: python apps/revenue-engine/main.py --mode once"],
-            "source": "fallback",
-        }
+    def _compute():
+        try:
+            report = live_confidence()
+            return {**report, "source": "computed"}
+        except Exception as exc:
+            log.warning("confidence fallback: %s", exc)
+            return {
+                "confidence_score": 0,
+                "confidence_tier": "LOW",
+                "forecast_p10_mrr_12mo": 0,
+                "forecast_p50_mrr_12mo": 300,
+                "forecast_p90_mrr_12mo": 3000,
+                "leading_indicators": {},
+                "recommended_actions": ["Run: python apps/revenue-engine/main.py --mode once"],
+                "source": "fallback",
+            }
+    return _cached("confidence", _CACHE_TTL, _compute)
 
 
 @app.get("/api/scorecards")
@@ -931,6 +988,95 @@ async def deploy_venture(venture_id: str) -> dict:
     return {"ok": True, "url": url, "venture_id": venture_id}
 
 
+@app.post("/api/ventures/cleanup")
+def bulk_cleanup_ventures() -> dict:
+    """
+    Kill all non-revenue ventures that are IDEATION, stale DEVELOPMENT, or FAILED.
+    Keeps: LIVE, SCALING, and any venture with a live_url (deployed product).
+    Returns: {killed_count, kept_count, details}
+    """
+    from packages.db.client import get_db, is_supabase_connected
+    from packages.revenue.store import list_ventures
+
+    all_v = list_ventures()
+    keep_statuses  = {"LIVE", "SCALING"}
+    killed_ids:  list[str] = []
+    kept_ids:    list[str] = []
+
+    for v in all_v:
+        vid    = v.get("venture_id", "")
+        status = v.get("status", "")
+        live   = v.get("live_url")
+
+        # Keep anything live or deployed
+        if status in keep_statuses or live:
+            kept_ids.append(vid)
+            continue
+
+        # Kill stale/incomplete ventures
+        if status in ("IDEATION", "DEVELOPMENT", "QA", "KILLED") or not v.get("go_decision"):
+            killed_ids.append(vid)
+
+    if killed_ids and is_supabase_connected():
+        try:
+            db = get_db()
+            for vid in killed_ids:
+                db.table("ventures").update({"status": "KILLED"}).eq("venture_id", vid).execute()
+            _cache.pop("portfolio", None)   # invalidate portfolio cache
+            log.info("[CLEANUP] Killed %d stale ventures", len(killed_ids))
+        except Exception as exc:
+            log.warning("[CLEANUP] DB update failed: %s", exc)
+    elif killed_ids:
+        # Local mode — update in JSON store
+        from packages.revenue.store import kill_venture_local
+        for vid in killed_ids:
+            try:
+                kill_venture_local(vid)
+            except Exception:
+                pass
+
+    return {
+        "killed_count": len(killed_ids),
+        "kept_count":   len(kept_ids),
+        "killed":       killed_ids,
+        "kept":         kept_ids,
+    }
+
+
+@app.post("/api/waitlist/{product_id}/join")
+async def join_waitlist_post(product_id: str, request: Request) -> dict:
+    """
+    POST /api/waitlist/{product_id}/join   body: {"email": "..."}
+    """
+    import re as _re
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Request body must be JSON with 'email' field")
+
+    email = (body.get("email") or "").strip().lower()
+    if not email or not _re.match(r"^[^@]+@[^@]+\.[^@]+$", email):
+        raise HTTPException(422, "Valid email address required")
+
+    from packages.db.client import get_db, is_supabase_connected
+    if not is_supabase_connected():
+        # Store locally — will be pushed to Supabase once connected
+        log.info("[WAITLIST] %s signed up for %s (local mode)", email, product_id)
+        return {"ok": True, "product_id": product_id, "email": email, "mode": "local"}
+
+    try:
+        db = get_db()
+        db.table("product_waitlist").upsert(
+            {"product_id": product_id, "email": email},
+            on_conflict="product_id,email",
+        ).execute()
+        log.info("[WAITLIST] %s → %s", email, product_id)
+        return {"ok": True, "product_id": product_id, "email": email}
+    except Exception as exc:
+        log.warning("[WAITLIST] insert failed: %s", exc)
+        raise HTTPException(500, "Could not save your email. Please try again.")
+
+
 @app.get("/api/products")
 def get_products() -> dict:
     """
@@ -952,17 +1098,19 @@ def get_products() -> dict:
 
 @app.get("/api/portfolio")
 def get_portfolio() -> dict:
-    live_data = _portfolio_from_supabase()
-    if live_data:
-        return live_data
-    slots = portfolio_slots()
-    live = sum(1 for s in slots if s["status"] == "LIVE")
-    return {"total_slots": len(slots), "live_count": live, "slots": slots, "source": "mock"}
+    def _compute():
+        live_data = _portfolio_from_supabase()
+        if live_data:
+            return live_data
+        slots = portfolio_slots()
+        live = sum(1 for s in slots if s["status"] == "LIVE")
+        return {"total_slots": len(slots), "live_count": live, "slots": slots, "source": "mock"}
+    return _cached("portfolio", _CACHE_TTL, _compute)
 
 
 @app.get("/api/trends")
 def get_trends() -> dict:
-    return trend_heatmap()
+    return _cached("trends", _CACHE_TTL, trend_heatmap)
 
 
 @app.get("/api/security/alerts")

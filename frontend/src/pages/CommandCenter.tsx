@@ -191,7 +191,11 @@ function ConfirmKillDialog({
   );
 }
 
-function ActiveRunCard({ run, onRefresh }: { run: PipelineRun; onRefresh: () => void }) {
+function ActiveRunCard({ run, onRefresh, onKill }: {
+  run: PipelineRun
+  onRefresh: () => void
+  onKill: (v: { venture_id: string; status: string; niche: string }) => void
+}) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -199,6 +203,8 @@ function ActiveRunCard({ run, onRefresh }: { run: PipelineRun; onRefresh: () => 
   }, []);
 
   const elapsedStr = elapsed(run.started_at);
+  const isDone = ["COMPLETED", "FAILED", "MANUAL_REVIEW"].includes(run.status);
+  const isLive = run.status === "COMPLETED";
 
   return (
     <div
@@ -229,6 +235,20 @@ function ActiveRunCard({ run, onRefresh }: { run: PipelineRun; onRefresh: () => 
           >
             {run.department}
           </span>
+          {/* Kill button — inline, only for non-live terminal runs */}
+          {isDone && !isLive && (
+            <button
+              onClick={() => onKill({ venture_id: run.venture_id, status: run.status, niche: "" })}
+              title="Kill this venture"
+              style={{
+                background: "#1a0000", color: "#f66", border: "1px solid #f44",
+                borderRadius: 4, padding: "1px 8px", fontSize: "0.68rem",
+                fontWeight: 700, cursor: "pointer", fontFamily: "monospace",
+              }}
+            >
+              Kill
+            </button>
+          )}
         </div>
       </div>
 
@@ -339,7 +359,7 @@ function ProductActions({ ventureId, onRefresh }: { ventureId: string; onRefresh
           }}
         >
           {deploying ? (
-            <>⏳ Deploying to Netlify…</>
+            <>⏳ Deploying to Railway..</>
           ) : (
             <>🚀 Launch Product</>
           )}
@@ -685,6 +705,26 @@ export default function App() {
             >
               {launching ? "Launching…" : "Launch New Venture"}
             </button>
+            {/* Bulk cleanup — kills all stale/incomplete ventures */}
+            <button
+              onClick={async () => {
+                if (!confirm("Kill all IDEATION + stale DEVELOPMENT ventures? LIVE/deployed ones are kept.")) return;
+                try {
+                  await fetch("/api/ventures/cleanup", { method: "POST" });
+                  await refreshVentures();
+                  await refreshRecentRuns();
+                } catch { /* silent */ }
+              }}
+              style={{
+                background: "#1a0000", color: "#f66",
+                border: "1px solid #f44", borderRadius: 4,
+                padding: "6px 12px", fontSize: "0.78rem",
+                fontWeight: 700, cursor: "pointer", fontFamily: "monospace",
+              }}
+              title="Kill all incomplete/stale ventures"
+            >
+              🗑 Cleanup
+            </button>
           </div>
         </div>
 
@@ -708,7 +748,12 @@ export default function App() {
                 {visibleRuns.filter((r) => r.status === "RUNNING" || r.status === "STARTED").length} active
               </div>
               {visibleRuns.map((run) => (
-                <ActiveRunCard key={run.run_id} run={run} onRefresh={refreshRecentRuns} />
+                <ActiveRunCard
+                  key={run.run_id}
+                  run={run}
+                  onRefresh={refreshRecentRuns}
+                  onKill={(v) => { setKillTarget(v as Venture); setKillError(null); }}
+                />
               ))}
             </div>
           );
@@ -857,100 +902,6 @@ export default function App() {
           <span className="DEVELOPMENT">Development</span>
           <span className="LIVE">Live</span>
         </div>
-      </section>
-
-      {/* Venture Management — Kill Switch */}
-      <section className="panel" style={{ marginTop: "1rem" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2>Venture Management</h2>
-          <span style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
-            {activeVentures.length} active · click Kill to shut down failed ventures
-          </span>
-        </div>
-
-        {sortedVentures.length === 0 ? (
-          <p style={{ color: "var(--muted)", fontSize: "0.82rem", marginTop: 8 }}>
-            No active ventures found.
-          </p>
-        ) : (
-          <table className="agent-table" style={{ marginTop: 10 }}>
-            <thead>
-              <tr>
-                <th>Venture ID</th>
-                <th>Niche</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedVentures.map((v) => {
-                const isRevenue = v.status === "LIVE" || v.status === "SCALING";
-                return (
-                  <tr key={v.venture_id}>
-                    <td className="mono" style={{ fontSize: "0.75rem" }}>{v.venture_id}</td>
-                    <td style={{ fontSize: "0.78rem" }}>{v.niche || "—"}</td>
-                    <td className="mono" style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
-                      {v.venture_type?.replace(/_/g, " ") ?? "—"}
-                    </td>
-                    <td>
-                      <span
-                        style={{
-                          background:
-                            v.status === "LIVE" || v.status === "SCALING" ? "#1a4a1a" :
-                            v.status === "DEVELOPMENT" || v.status === "QA" ? "#1a2a3a" :
-                            "#2a1a1a",
-                          color:
-                            v.status === "LIVE" || v.status === "SCALING" ? "#4c4" :
-                            v.status === "DEVELOPMENT" || v.status === "QA" ? "#4af" :
-                            "#f66",
-                          borderRadius: 4,
-                          padding: "1px 6px",
-                          fontSize: "0.7rem",
-                          fontWeight: 700,
-                          fontFamily: "monospace",
-                        }}
-                      >
-                        {v.status}
-                      </span>
-                    </td>
-                    <td>
-                      {isRevenue ? (
-                        <span
-                          title="Generating revenue — cannot kill"
-                          style={{
-                            fontSize: "0.72rem",
-                            color: "#4c4",
-                            fontFamily: "monospace",
-                          }}
-                        >
-                          Protected
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => { setKillTarget(v); setKillError(null); }}
-                          style={{
-                            background: "#2a0a0a",
-                            color: "#f66",
-                            border: "1px solid #f44",
-                            borderRadius: 4,
-                            padding: "2px 10px",
-                            fontSize: "0.72rem",
-                            fontWeight: 700,
-                            cursor: "pointer",
-                            fontFamily: "monospace",
-                          }}
-                        >
-                          Kill
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
       </section>
 
     </div>
