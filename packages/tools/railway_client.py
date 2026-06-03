@@ -176,7 +176,7 @@ mutation CreateProject($name: String!) {
 """
 
 _Q_PROJECT_BY_ID = """
-query ProjectById($id: ID!) {
+query ProjectById($id: String!) {
   project(id: $id) {
     id
     environments { edges { node { id name } } }
@@ -223,7 +223,7 @@ async def _get_or_create_project(
 # ---------------------------------------------------------------------------
 
 _Q_SERVICES = """
-query GetServices($projectId: ID!) {
+query GetServices($projectId: String!) {
   project(id: $projectId) {
     services { edges { node { id name } } }
   }
@@ -231,7 +231,7 @@ query GetServices($projectId: ID!) {
 """
 
 _M_CREATE_SERVICE = """
-mutation CreateService($projectId: ID!, $name: String!) {
+mutation CreateService($projectId: String!, $name: String!) {
   serviceCreate(input: { projectId: $projectId, name: $name }) { id name }
 }
 """
@@ -315,7 +315,7 @@ async def _upload_tarball(
 
 
 _M_CREATE_DEPLOYMENT = """
-mutation CreateDeployment($serviceId: ID!, $environmentId: ID!, $uploadId: String!) {
+mutation CreateDeployment($serviceId: String!, $environmentId: String!, $uploadId: String!) {
   deploymentCreate(input: {
     serviceId: $serviceId
     environmentId: $environmentId
@@ -325,7 +325,7 @@ mutation CreateDeployment($serviceId: ID!, $environmentId: ID!, $uploadId: Strin
 """
 
 _Q_DEPLOYMENT_STATUS = """
-query DeploymentStatus($id: ID!) {
+query DeploymentStatus($id: String!) {
   deployment(id: $id) { id status url staticUrl }
 }
 """
