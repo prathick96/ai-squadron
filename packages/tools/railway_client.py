@@ -64,13 +64,30 @@ async def deploy_to_railway(venture_id: str, build_dir: Path) -> str:
     Returns the live HTTPS URL on success.
     Raises RuntimeError if the deployment fails or times out.
     """
-    token       = _token()
+    token        = _token()
     project_name = "ai-squadron"
     service_name = venture_id[:30]
 
     async with httpx.AsyncClient(timeout=30.0, verify=_ssl_verify()) as client:
-        project_id, env_id = await _get_or_create_project(client, token, project_name)
-        service_id         = await _get_or_create_service(client, token, project_id, service_name)
+        # Railway auto-injects RAILWAY_PROJECT_ID and RAILWAY_ENVIRONMENT_ID for
+        # every running service.  Use them directly to skip the GetProject GQL
+        # call — that call fails with 400 when the token is a project-scoped
+        # deploy key rather than a full Personal Access Token (PAT).
+        injected_project = os.getenv("RAILWAY_PROJECT_ID", "")
+        injected_env     = (
+            os.getenv("RAILWAY_ENVIRONMENT_ID", "")
+            or os.getenv("RAILWAY_ENVIRONMENT", "")
+        )
+
+        if injected_project and injected_env:
+            project_id = injected_project
+            env_id     = injected_env
+            log.info("[RAILWAY] Using injected ids project=%s env=%s",
+                     project_id[:8], env_id[:8])
+        else:
+            project_id, env_id = await _get_or_create_project(client, token, project_name)
+
+        service_id = await _get_or_create_service(client, token, project_id, service_name)
         log.info("[RAILWAY] project=%s service=%s env=%s",
                  project_id[:8], service_id[:8], env_id[:8])
 
@@ -111,7 +128,13 @@ async def _gql(
         headers=_auth_headers(token),
         timeout=30.0,
     )
-    resp.raise_for_status()
+    if not resp.is_success:
+        body_preview = resp.text[:600]
+        raise RuntimeError(
+            f"Railway API HTTP {resp.status_code} — {body_preview}\n"
+            "Hint: RAILWAY_TOKEN must be a Personal Access Token (PAT) from "
+            "railway.app/account/tokens, not a project/service deploy token."
+        )
     body = resp.json()
     if errors := body.get("errors"):
         raise RuntimeError(f"Railway GraphQL error: {errors[0].get('message', errors)}")
@@ -124,13 +147,13 @@ async def _gql(
 
 _Q_PROJECTS = """
 query ListProjects {
-  projects { nodes { id name environments { nodes { id name } } services { nodes { id name } } } }
+  projects { nodes { id name environments { nodes { id name } } } }
 }
 """
 
 _M_CREATE_PROJECT = """
 mutation CreateProject($name: String!) {
-  projectCreate(input: { name: $name, isPublic: false }) {
+  projectCreate(input: { name: $name }) {
     id
     environments { nodes { id name } }
   }
@@ -243,7 +266,10 @@ async def _upload_tarball(
         timeout=120.0,
         verify=_ssl_verify(),
     )
-    resp.raise_for_status()
+    if not resp.is_success:
+        raise RuntimeError(
+            f"Railway upload HTTP {resp.status_code} — {resp.text[:400]}"
+        )
     data = resp.json()
     upload_id = data.get("uploadId") or data.get("id", "")
     if not upload_id:
