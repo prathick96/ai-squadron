@@ -205,10 +205,11 @@ async def test_qa_technical_skips_playwright_when_vite_fails(tmp_path, monkeypat
     with patch("packages.tools.playwright_runner.playwright_available", return_value=True):
         checks_run, failures, updates = await qa_technical._validate_build(fake_build)
 
-    # Phase 1: vite build failure is WARNING-ONLY (not a blocker) when
-    # QA_REQUIRE_VITE_BUILD is not set.  It must NOT be in failures.
-    assert "vite_build" not in failures, (
-        "vite_build should be a warning in Phase 1 (QA_REQUIRE_VITE_BUILD=false)"
+    # Phase 2 default: QA_REQUIRE_VITE_BUILD=true — vite_build failure IS a blocker.
+    # The key behaviour under test is that Playwright is skipped when dist/ was
+    # never produced (regardless of whether vite_build blocks or warns).
+    assert "vite_build" in failures, (
+        "vite_build should be a blocker with QA_REQUIRE_VITE_BUILD=true (Phase 2 default)"
     )
     # Playwright should indicate skip because dist/ was never produced.
     assert any("skip" in e.lower() or "did not produce" in e.lower()
