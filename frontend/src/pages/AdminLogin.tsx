@@ -151,6 +151,12 @@ export default function AdminLogin() {
         throw new Error('auth_failed')
       }
 
+      // Ensure admin profile exists (no trigger — created in code)
+      await supabase.from('user_profiles').upsert(
+        { id: data.user.id, email: data.user.email ?? email, is_admin: true },
+        { onConflict: 'id' }
+      )
+
       // SUCCESS — reset brute-force counter, store session timestamp
       resetAttempts()
       localStorage.setItem(LS_LAST_SEEN, String(Date.now()))

@@ -34,8 +34,19 @@ export default function Auth() {
 
     try {
       if (mode === 'signup') {
-        const { error: err } = await supabase.auth.signUp({ email, password })
+        const { data: signUpData, error: err } = await supabase.auth.signUp({ email, password })
         if (err) throw err
+
+        // Create user_profiles row in code (not via trigger — triggers on auth.users
+        // have cross-schema permission issues that cause 500s in production Supabase).
+        // Uses upsert so it's idempotent and safe to call multiple times.
+        if (signUpData.user) {
+          await supabase.from('user_profiles').upsert(
+            { id: signUpData.user.id, email: signUpData.user.email ?? email },
+            { onConflict: 'id' }
+          )
+        }
+
         setSent(true)
       } else {
         const { data, error: err } = await supabase.auth.signInWithPassword({ email, password })
