@@ -40,7 +40,7 @@ class Settings:
     FAL_KEY:                  str  = os.getenv("FAL_KEY", "")
 
     # Infrastructure
-    RAILWAY_TOKEN:            str  = os.getenv("RAILWAY_TOKEN", os.getenv("VERCEL_TOKEN", ""))
+    RAILWAY_TOKEN:            str  = os.getenv("RAILWAY_TOKEN", os.getenv("RAILWAY_API_TOKEN", ""))
     RAILWAY_PROJECT_ID:       str  = os.getenv("RAILWAY_PROJECT_ID", "")
     STRIPE_SECRET_KEY:        str  = os.getenv("STRIPE_SECRET_KEY", "")
 

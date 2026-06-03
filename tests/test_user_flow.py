@@ -221,16 +221,9 @@ class TestUserProfileHelper:
         assert profile is None
 
 
-# ─── Health endpoint includes vercel_available ────────────────────────────────
+# ─── Health endpoint ─────────────────────────────────────────────────────────
 
 class TestHealthEndpoint:
-    def test_health_has_vercel_available_field(self):
-        resp = client.get("/api/health")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "vercel_available" in body
-        assert isinstance(body["vercel_available"], bool)
-
     def test_health_has_railway_available_field(self):
         resp = client.get("/api/health")
         body = resp.json()

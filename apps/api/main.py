@@ -317,13 +317,6 @@ def _railway_ok() -> bool:
         return False
 
 
-def _vercel_ok() -> bool:
-    try:
-        from packages.tools.vercel_client import vercel_available
-        return vercel_available()
-    except Exception:
-        return False
-
 
 @app.get("/api/health")
 def health() -> dict:
@@ -345,7 +338,6 @@ def health() -> dict:
         "storage":              storage,
         "active_pipeline_runs": active,
         "railway_available":    _railway_ok(),
-        "vercel_available":     _vercel_ok(),
     }
 
 
@@ -885,20 +877,18 @@ def _cancel_subscription(data: dict) -> None:
 @app.post("/api/ventures/{venture_id}/deploy")
 async def deploy_venture(venture_id: str) -> dict:
     """
-    Deploy a venture's built React app to Railway (primary) or Vercel (fallback).
+    Deploy a venture's pre-built React SPA to Railway.
 
-    Provider priority:
-      1. Railway — if RAILWAY_TOKEN is set (MUST be a User Account Token).
-                   Get from: railway.app → avatar → Account Settings → Tokens → New Token
-                   NOT a Project Token (those return 'Not Authorized').
-      2. Vercel  — if VERCEL_TOKEN is set. Zero-config fallback.
+    Packs dist/ + Dockerfile (nginx:alpine) into a tarball and deploys to Railway.
+    A *.up.railway.app domain is auto-created when the service is first deployed.
 
     Required Railway Variable:
-      RAILWAY_TOKEN = <User Account Token from Account Settings>
+      RAILWAY_TOKEN = <User Account Token>
+      Get from: railway.app → avatar → Account Settings → Tokens → New Token
+      NOT a Project Token (those cannot create services/domains).
     """
     from packages.db.pipeline import fetch_build_artifact
     from packages.tools.railway_client import deploy_to_railway, railway_available
-    from packages.tools.vercel_client import deploy_to_vercel, vercel_available
     import os as _os
 
     builds_root = Path(_os.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
@@ -961,38 +951,23 @@ async def deploy_venture(venture_id: str) -> dict:
         except Exception as exc:
             raise HTTPException(500, f"Build step failed: {exc}")
 
-    # ── Deploy — Railway first, Vercel as fallback ─────────────────────────
-    url      = ""
-    last_err = ""
-
-    if railway_available():
-        try:
-            log.info("[DEPLOY] Deploying to Railway | venture=%s", venture_id)
-            url = await deploy_to_railway(venture_id, build_dir)
-            log.info("[DEPLOY] ✓ Railway | url=%s", url)
-        except Exception as exc:
-            last_err = str(exc)
-            log.warning("[DEPLOY] Railway failed (%s) — trying Vercel fallback", exc)
-
-    if not url and vercel_available():
-        try:
-            log.info("[DEPLOY] Deploying to Vercel (fallback) | venture=%s", venture_id)
-            url = await deploy_to_vercel(venture_id, build_dir)
-            log.info("[DEPLOY] ✓ Vercel | url=%s", url)
-        except Exception as exc:
-            last_err = str(exc)
-            log.exception("[DEPLOY] Vercel fallback also failed: %s", exc)
-
-    if not url:
+    # ── Deploy to Railway ──────────────────────────────────────────────────
+    if not railway_available():
         raise HTTPException(
-            500,
-            f"Deployment failed.\nLast error: {last_err}\n\n"
-            "RAILWAY_TOKEN required (User Account Token — NOT a Project Token):\n"
-            "  1. railway.app → click your avatar → Account Settings → Tokens\n"
-            "  2. New Token → name 'AI Squadron' → Full Access → Create\n"
-            "  3. Add RAILWAY_TOKEN=<token> in Railway → your service → Variables\n"
-            "  4. Click Launch Product again"
+            503,
+            "RAILWAY_TOKEN not configured.\n"
+            "  1. railway.app → avatar → Account Settings → Tokens → New Token\n"
+            "  2. Set RAILWAY_TOKEN=<token> in Railway → your service → Variables\n"
+            "  3. Try again — no redeploy of the API needed, just add the variable."
         )
+
+    try:
+        log.info("[DEPLOY] Deploying to Railway | venture=%s", venture_id)
+        url = await deploy_to_railway(venture_id, build_dir)
+        log.info("[DEPLOY] ✓ Railway | url=%s", url)
+    except Exception as exc:
+        log.exception("[DEPLOY] Railway deployment failed: %s", exc)
+        raise HTTPException(500, f"Railway deployment failed: {exc}")
 
     # ── Persist live_url to Supabase ─────────────────────────────────────────
     try:

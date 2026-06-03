@@ -48,7 +48,7 @@ const PRODUCTS = [
     category: 'Finance SaaS',
     price: '$19/mo',
     status: 'live' as const,
-    liveUrl: 'https://snazzy-baklava-748f95.netlify.app/',
+    liveUrl: 'https://aisq-receipt-scanner.up.railway.app/',
   },
   {
     id: 'freelancerflow',
