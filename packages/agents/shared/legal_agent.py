@@ -259,7 +259,10 @@ async def legal_agent_node(state: AgentState) -> AgentState:
         response = await call_llm(
             "LEGAL_AGENT", _REVIEW_SYSTEM_PROMPT, user_prompt,
             temperature=0.1,
-            max_tokens=1024,   # legal review JSON is small — cap tightly to prevent truncation
+            # 2048 tokens is enough for the response JSON (5 flags × ~100 chars each ≈ 500 tokens)
+            # while preventing the massive truncation seen with the uncapped default (8192 tokens
+            # produced 28000+ char responses that were cut off mid-string by the prior Haiku model).
+            max_tokens=2048,
         )
         raw_json = extract_json(response.text)
         review: dict[str, Any] = json.loads(raw_json)
@@ -267,18 +270,14 @@ async def legal_agent_node(state: AgentState) -> AgentState:
         llm_cleared = review.get("is_cleared", True)
         copyright_clear = review.get("copyright_clear", True)
         gdpr_reviewed = review.get("gdpr_reviewed", False)
-    except json.JSONDecodeError as exc:
-        # Truncated or malformed JSON — try extracting is_cleared with regex as fallback
-        log.warning("[LEGAL_NODE] JSON parse failed (%s) — attempting regex fallback", exc)
+    except (json.JSONDecodeError, Exception) as exc:
+        # JSON parse failure means the LLM response was truncated or malformed.
+        # Do NOT use regex to extract is_cleared — a partial response may show false=false
+        # before the full context is evaluated, causing false denials.
+        # Fall back to deterministic checks only (which are now precise and reliable).
+        log.warning("[LEGAL_NODE] LLM review failed (%s) — using deterministic checks only", exc)
         raw = getattr(response, "text", "") or ""
-        m = re.search(r'"is_cleared"\s*:\s*(true|false)', raw, re.IGNORECASE)
-        llm_cleared = (m.group(1).lower() == "true") if m else (len(immediate_blockers) == 0)
-        llm_flags = []
-        copyright_clear = True
-        gdpr_reviewed = False
-        log.warning("[LEGAL_NODE] Regex fallback: is_cleared=%s | raw_len=%d", llm_cleared, len(raw))
-    except Exception as exc:
-        log.warning("[LEGAL_NODE] LLM review failed, using deterministic only: %s", exc)
+        log.warning("[LEGAL_NODE] raw_len=%d raw_start=%r", len(raw), raw[:80])
         llm_flags = []
         llm_cleared = len(immediate_blockers) == 0
         copyright_clear = True

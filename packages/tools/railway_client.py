@@ -38,7 +38,6 @@ import httpx
 log = logging.getLogger(__name__)
 
 _GRAPHQL_URL   = "https://backboard.railway.app/graphql/v2"
-_UPLOAD_URL    = "https://backboard.railway.app/deployments/uploads"
 _POLL_INTERVAL = 8     # seconds between status checks
 _DEPLOY_TIMEOUT = 600  # 10 minutes — Docker build + container start
 
@@ -469,25 +468,65 @@ def _make_tarball(build_dir: Path) -> bytes:
 # Upload + Deploy
 # ---------------------------------------------------------------------------
 
+# GraphQL mutation to create a pre-signed source upload slot.
+# Returns { id, url } where url is a temporary S3 pre-signed PUT URL.
+# The id is used as sourceUploadId in deploymentCreate.
+# This avoids the graphql-multipart-request-spec ordering requirement of the
+# legacy /deployments/uploads REST endpoint (which returned HTTP 400 with
+# "Misordered multipart fields; files should follow 'map'").
+_M_SOURCE_UPLOAD_CREATE = """
+mutation SourceUploadCreate {
+  sourceUploadCreate {
+    id
+    url
+  }
+}
+"""
+
+
 async def _upload_tarball(
     client: httpx.AsyncClient,
     token: str,
     tarball: bytes,
 ) -> str:
-    resp = await client.post(
-        _UPLOAD_URL,
-        files={"file": ("source.tar.gz", tarball, "application/gzip")},
-        headers={"Authorization": f"Bearer {token}"},
+    """
+    Upload tarball to Railway via sourceUploadCreate GraphQL mutation.
+
+    Flow:
+      1. sourceUploadCreate → { id, url }  (url is S3 pre-signed PUT endpoint)
+      2. PUT tarball directly to url        (no auth header — S3 uses the signature)
+      3. Return id for use in deploymentCreate
+
+    The old /deployments/uploads multipart endpoint requires graphql-multipart-request-spec
+    field ordering (operations → map → file) and returned HTTP 400 when only the file
+    field was sent without the preceding 'map' field.
+    """
+    # Step 1: create upload slot and get pre-signed URL
+    data      = await _gql(client, token, _M_SOURCE_UPLOAD_CREATE, {})
+    src       = data.get("sourceUploadCreate") or {}
+    upload_id = src.get("id", "")
+    upload_url = src.get("url", "")
+
+    if not upload_id or not upload_url:
+        raise RuntimeError(
+            f"Railway sourceUploadCreate returned unexpected response: {src}"
+        )
+    log.info("[RAILWAY] sourceUploadCreate id=%s url=%s…", upload_id[:12], upload_url[:60])
+
+    # Step 2: PUT tarball to pre-signed URL — S3 pre-signed URLs don't use the Bearer token
+    upload_resp = await client.put(
+        upload_url,
+        content=tarball,
+        headers={"Content-Type": "application/gzip"},
         timeout=180.0,
     )
-    if not resp.is_success:
+    if not upload_resp.is_success:
         raise RuntimeError(
-            f"Railway upload failed HTTP {resp.status_code}: {resp.text[:400]}"
+            f"Railway source upload PUT failed HTTP {upload_resp.status_code}: "
+            f"{upload_resp.text[:300]}"
         )
-    data      = resp.json()
-    upload_id = data.get("uploadId") or data.get("id", "")
-    if not upload_id:
-        raise RuntimeError(f"Railway upload returned no uploadId: {data}")
+
+    log.info("[RAILWAY] Upload PUT → HTTP %d (%.1f KB)", upload_resp.status_code, len(tarball) / 1024)
     return upload_id
 
 

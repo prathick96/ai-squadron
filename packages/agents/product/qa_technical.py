@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import re as _re
 import sys
 import uuid
 from pathlib import Path
@@ -38,7 +39,6 @@ _MAX_BUNDLE_SIZE_MB = 50
 
 # BLOCKING secrets — actual API keys / tokens hardcoded in source.
 # These require a real-looking VALUE (not just a variable name pattern).
-import re as _re
 _SECRET_PATTERNS_BLOCKING = [
     "sk_live_",          # Stripe live key — always followed by 20+ chars
     "sk_test_",          # Stripe test key
