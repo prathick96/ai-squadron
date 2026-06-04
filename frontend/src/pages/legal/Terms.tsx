@@ -64,7 +64,7 @@ export default function Terms() {
       <Section title="4. Payment, Billing and Subscriptions">
         <p>
           All financial transactions are processed by <strong>Paddle.com Market Limited ("Paddle")</strong>, our designated
-          Merchant of Record. When you purchase a subscription or product, your contract for payment is with Paddle, not
+          payment processor. When you purchase a subscription or product, your contract for payment is with Paddle, not
           AI Squadron directly. Paddle's terms of service and privacy policy govern the payment transaction.
         </p>
         <p>

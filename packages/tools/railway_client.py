@@ -89,7 +89,7 @@ server {
     # Restrict browser features
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(self)" always;
     # Content Security Policy — allows Supabase, PostHog, Paddle; blocks inline eval
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.paddle.com https://us.i.posthog.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co https://us.i.posthog.com https://sandbox-api.paddle.com https://api.paddle.com; frame-src https://sandbox-buy.paddle.com https://buy.paddle.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.paddle.com https://us.i.posthog.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co https://us.i.posthog.com https://api.razorpay.com https://lumberjack.razorpay.com; frame-src https://api.razorpay.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
     # HSTS — tell browsers to always use HTTPS (1 year)
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 

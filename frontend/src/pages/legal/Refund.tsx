@@ -13,7 +13,7 @@ export default function Refund() {
         <p style={p}>
           AI Squadron aims to deliver real value from day one. If we fall short, we want to make it right.
           This Refund Policy describes the conditions under which we issue refunds for subscriptions and
-          one-time purchases made through Paddle, our Merchant of Record.
+          one-time purchases made through Razorpay.
         </p>
         <p style={p}>
           All refund requests are subject to this policy, which applies in addition to any rights you may
@@ -34,7 +34,7 @@ export default function Refund() {
         <p style={p}>
           To request a refund within the 14-day window, email <a href={`mailto:${EMAIL}`} style={{ color: '#7c3aed' }}>{EMAIL}</a>{' '}
           with your registered email address and the reason for your request. Refunds are processed within 5–10 business days
-          and returned to your original payment method via Paddle.
+          and returned to your original payment method via Razorpay.
         </p>
         <p style={p}>
           After the 14-day window, subscription fees are <strong style={strong}>non-refundable</strong> and your plan
@@ -79,8 +79,8 @@ export default function Refund() {
       <section style={sec}>
         <h2 style={h2}>5. How Refunds Are Processed</h2>
         <p style={p}>
-          All refunds are processed through <strong style={strong}>Paddle</strong>, our Merchant of Record.
-          Paddle will return the funds to your original payment method. Processing times depend on your card
+          All refunds are processed through <strong style={strong}>Paddle</strong>, our payment processor.
+          Razorpay will return the funds to your original payment method. Processing times depend on your card
           issuer or bank but typically take 5–10 business days after Paddle approves the refund.
         </p>
         <p style={p}>

@@ -2,15 +2,13 @@
 packages/revenue/cycle.py
 Day 2 revenue cycle: sync → scorecards → confidence → kill/scale signals.
 
-Payment provider auto-detection (in priority order):
-  1. PADDLE_API_KEY set  → use Paddle (recommended for Indian founders, USD payments)
-  2. STRIPE_SECRET_KEY set → use Stripe (for when you have a US/CA entity)
-  3. Neither set → demo mode (records $0 MRR + burn for ven_wedge_001)
+Payment provider: Razorpay only.
+  RAZORPAY_KEY_ID + RAZORPAY_KEY_SECRET → live sync
+  Neither set → demo mode (records $0 MRR + burn for ven_wedge_001)
 """
 from __future__ import annotations
 
 import logging
-import os
 
 from packages.revenue import store
 from packages.revenue.adsense_sync import sync_adsense
@@ -21,26 +19,10 @@ log = logging.getLogger(__name__)
 
 
 def _sync_subscriptions() -> dict:
-    """
-    Auto-detect the configured payment provider and sync subscriptions.
-    Paddle takes priority over Stripe when both keys are set.
-    """
-    paddle_key = os.getenv("PADDLE_API_KEY", "")
-    stripe_key = os.getenv("STRIPE_SECRET_KEY", "")
-
-    if paddle_key and "your_" not in paddle_key:
-        log.info("Payment provider: Paddle")
-        from packages.revenue.paddle_sync import sync_paddle
-        return sync_paddle()
-
-    if stripe_key and "your_" not in stripe_key and not stripe_key.startswith("sk_test_xxx"):
-        log.info("Payment provider: Stripe")
-        from packages.revenue.stripe_sync import sync_stripe
-        return sync_stripe()
-
-    log.info("Payment provider: demo (set PADDLE_API_KEY or STRIPE_SECRET_KEY for live)")
-    from packages.revenue.stripe_sync import sync_stripe  # handles demo mode internally
-    return sync_stripe()
+    """Sync Razorpay subscriptions to revenue_ledger."""
+    log.info("Payment provider: Razorpay")
+    from packages.revenue.razorpay_sync import sync_razorpay
+    return sync_razorpay()
 
 
 async def run_day2_cycle() -> dict:

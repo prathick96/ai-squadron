@@ -291,7 +291,7 @@ async def test_refresh_tos_returns_dict_without_tavily(monkeypatch):
     result = await refresh_tos_snapshots()
     assert isinstance(result, dict)
     assert "youtube" in result
-    assert "stripe" in result
+    assert "razorpay" in result
 
 
 @pytest.mark.asyncio

@@ -42,7 +42,16 @@ class Settings:
     # Infrastructure
     RAILWAY_TOKEN:            str  = os.getenv("RAILWAY_TOKEN", os.getenv("RAILWAY_API_TOKEN", ""))
     RAILWAY_PROJECT_ID:       str  = os.getenv("RAILWAY_PROJECT_ID", "")
-    STRIPE_SECRET_KEY:        str  = os.getenv("STRIPE_SECRET_KEY", "")
+
+    # Razorpay — sole payment provider (Indian founder, settles in INR)
+    # Get from: dashboard.razorpay.com → Settings → API Keys
+    RAZORPAY_KEY_ID:               str = os.getenv("RAZORPAY_KEY_ID", "")
+    RAZORPAY_KEY_SECRET:           str = os.getenv("RAZORPAY_KEY_SECRET", "")
+    RAZORPAY_WEBHOOK_SECRET:       str = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
+    RAZORPAY_PLAN_BUILDER_MONTHLY: str = os.getenv("RAZORPAY_PLAN_BUILDER_MONTHLY", "")
+    RAZORPAY_PLAN_BUILDER_ANNUAL:  str = os.getenv("RAZORPAY_PLAN_BUILDER_ANNUAL",  "")
+    RAZORPAY_PLAN_STUDIO_MONTHLY:  str = os.getenv("RAZORPAY_PLAN_STUDIO_MONTHLY",  "")
+    RAZORPAY_PLAN_STUDIO_ANNUAL:   str = os.getenv("RAZORPAY_PLAN_STUDIO_ANNUAL",   "")
 
     # App behaviour
     ENVIRONMENT:              str  = os.getenv("ENVIRONMENT", "development")

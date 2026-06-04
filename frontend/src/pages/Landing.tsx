@@ -32,7 +32,7 @@ const S = {
 const FEATURES = [
   { icon: '🤖', title: 'AI-Built, Human-Owned', desc: 'Every product is autonomously designed, coded, and deployed by AI agents — you own the result.' },
   { icon: '⚡', title: 'Live in Minutes', desc: 'From niche idea to deployed SaaS or YouTube channel in under 10 minutes. No engineers needed.' },
-  { icon: '🌍', title: 'USD Revenue, Worldwide', desc: 'Payments via Paddle (Merchant of Record). Sell globally. No foreign entity required.' },
+  { icon: '🌍', title: 'USD Revenue, Worldwide', desc: 'Payments via Razorpay (payment processor). Sell globally. No foreign entity required.' },
   { icon: '📊', title: 'Revenue Intelligence', desc: 'SCALE/KILL/MAINTAIN signals automatically. Every venture tracked. Dead weight auto-cut.' },
   { icon: '🔐', title: 'Legal & Compliant', desc: 'Legal Agent reviews every deployment. Terms, privacy, refund policies included by default.' },
   { icon: '🎬', title: 'Product + Media', desc: 'Both SaaS (React + FastAPI) and faceless media channels (YouTube, TikTok) in one pipeline.' },

@@ -160,7 +160,7 @@ export default defineConfig({
     <meta http-equiv="X-Frame-Options" content="SAMEORIGIN" />
     <!-- Security: CSP fallback for local dev (nginx provides the authoritative header) -->
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.paddle.com https://us.i.posthog.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://us.i.posthog.com https://sandbox-api.paddle.com https://api.paddle.com; frame-src https://sandbox-buy.paddle.com https://buy.paddle.com; frame-ancestors 'none';" />
+          content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.paddle.com https://us.i.posthog.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://us.i.posthog.com https://api.razorpay.com https://lumberjack.razorpay.com; frame-src https://api.razorpay.com; frame-ancestors 'none';" />
     <title>App</title>
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

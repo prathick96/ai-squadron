@@ -78,23 +78,17 @@ _PLATFORM_RULES: dict[str, dict[str, Any]] = {
         "tos_url": "https://help.instagram.com/581066165581870",
         "tos_version": "2024-01",
     },
-    "stripe": {
-        "prohibited_business_types": [
-            "gambling", "adult_content", "cryptocurrency", "multi_level_marketing",
-        ],
-        "requires_clear_refund_policy": True,
-        "dispute_rate_threshold": 0.005,   # 0.5% — above this triggers review
-        "tos_url": "https://stripe.com/legal/ssa",
-        "tos_version": "2024-06",
-    },
-    "paddle": {
+    "razorpay": {
         "prohibited_business_types": [
             "gambling", "adult_content", "firearms", "drugs", "multi_level_marketing",
+            "cryptocurrency_exchange", "pyramid_schemes",
         ],
+        "requires_clear_refund_policy": True,
         "requires_product_description": True,
-        "requires_refund_policy": True,
-        "merchant_of_record": True,  # Paddle handles VAT/tax globally
-        "tos_url": "https://www.paddle.com/legal/paddle-vendor-agreement",
+        "settlement_currency": "INR",  # RBI regulation — settles in INR regardless of charge currency
+        "international_payments_require_activation": True,
+        "dispute_rate_threshold": 0.01,  # 1% dispute rate triggers review
+        "tos_url": "https://razorpay.com/terms/",
         "tos_version": "2024-01",
     },
     "railway": {
@@ -201,7 +195,7 @@ async def legal_agent_node(state: AgentState) -> AgentState:
         venture_type = "MEDIA_CHANNEL"
     else:
         artifact = state.get("build_artifact") or {}
-        platforms = ["railway", "stripe"]
+        platforms = ["railway", "razorpay"]
         venture_type = venture_brief.get("venture_type", "MICRO_SAAS")
 
     niche = venture_brief.get("niche", "unknown")

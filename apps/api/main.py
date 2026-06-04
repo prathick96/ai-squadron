@@ -114,7 +114,7 @@ class LedgerEntryBody(BaseModel):
     venture_id: str
     period_start: str  # YYYY-MM-DD
     period_end: str    # YYYY-MM-DD
-    revenue_source: Literal["STRIPE", "ADSENSE", "MANUAL"]
+    revenue_source: Literal["RAZORPAY", "ADSENSE", "MANUAL"]
     amount_usd: float
     burn_usd: float = 0.0
     notes: str = ""
@@ -783,84 +783,168 @@ def download_build(venture_id: str):
     )
 
 
-@app.post("/api/webhooks/paddle")
-async def paddle_webhook(request: Request) -> dict:
+# ─── Razorpay payment endpoints ───────────────────────────────────────────────
+
+class _CreateSubscriptionRequest(BaseModel):
+    plan_key: str   # e.g. "builder_monthly", "studio_annual"
+    user_id:  str = ""
+    email:    str = ""
+
+
+@app.post("/api/payments/create-subscription")
+async def create_razorpay_subscription(req: _CreateSubscriptionRequest) -> dict:
     """
-    Paddle webhook handler — updates user_subscriptions when Paddle fires events.
-    Events handled: subscription.created, subscription.updated, subscription.cancelled.
+    Create a Razorpay subscription slot and return key_id + subscription_id.
 
-    Set in Paddle Dashboard → Notifications → add endpoint:
-      https://ai-squadron-production.up.railway.app/api/webhooks/paddle
+    The frontend opens the Razorpay checkout modal with these values.
+    After payment the user's handler POSTs the response to /api/payments/verify.
+
+    Required Railway vars: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET,
+                           RAZORPAY_PLAN_<PLAN_KEY> (one per plan)
     """
-    import json as _json
-    import hmac
-    import hashlib
+    from packages.tools.razorpay_client import create_subscription, razorpay_available
 
-    body = await request.body()
-    paddle_sig = request.headers.get("Paddle-Signature", "")
-    secret     = os.getenv("PADDLE_WEBHOOK_SECRET", "")
+    if not razorpay_available():
+        raise HTTPException(503, "RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET not configured")
 
-    # Verify signature when secret is set
-    if secret and paddle_sig:
-        ts_part, h1_part = "", ""
-        for part in paddle_sig.split(";"):
-            if part.startswith("ts="):
-                ts_part = part[3:]
-            elif part.startswith("h1="):
-                h1_part = part[3:]
-        signed  = f"{ts_part}:{body.decode()}"
-        expected = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected, h1_part):
-            raise HTTPException(401, "Invalid Paddle signature")
+    allowed_plans = {
+        "builder_monthly", "builder_annual", "studio_monthly", "studio_annual",
+    }
+    if req.plan_key not in allowed_plans:
+        raise HTTPException(400, f"Unknown plan_key '{req.plan_key}'. "
+                                 f"Choose from: {sorted(allowed_plans)}")
 
     try:
-        payload  = _json.loads(body)
-        evt_type = payload.get("event_type", "")
-        data     = payload.get("data", {})
-
-        if evt_type in ("subscription.created", "subscription.updated"):
-            _upsert_subscription(data)
-        elif evt_type == "subscription.cancelled":
-            _cancel_subscription(data)
-
-        return {"ok": True, "event_type": evt_type}
+        result = create_subscription(
+            plan_key=req.plan_key,
+            user_id=req.user_id or "anon",
+            user_email=req.email or "",
+        )
+        return {
+            "key_id":          os.getenv("RAZORPAY_KEY_ID", ""),
+            "subscription_id": result["subscription_id"],
+            "plan_key":        req.plan_key,
+        }
     except Exception as exc:
-        log.exception("[WEBHOOK] Paddle webhook error: %s", exc)
+        log.exception("[PAYMENTS] create-subscription failed: %s", exc)
+        raise HTTPException(500, f"Subscription creation failed: {exc}")
+
+
+class _VerifyPaymentRequest(BaseModel):
+    razorpay_payment_id:      str
+    razorpay_subscription_id: str
+    razorpay_signature:       str
+
+
+@app.post("/api/payments/verify")
+async def verify_razorpay_payment(req: _VerifyPaymentRequest) -> dict:
+    """
+    Verify Razorpay payment signature and mark subscription active in Supabase.
+
+    Called by the frontend after the Razorpay checkout modal fires the handler.
+    Only marks the subscription active if the HMAC-SHA256 signature matches.
+    """
+    from packages.tools.razorpay_client import verify_payment_signature, fetch_subscription
+
+    try:
+        valid = verify_payment_signature(
+            req.razorpay_payment_id,
+            req.razorpay_subscription_id,
+            req.razorpay_signature,
+        )
+    except EnvironmentError as exc:
+        raise HTTPException(503, str(exc))
+
+    if not valid:
+        log.warning("[PAYMENTS] Invalid Razorpay signature for sub=%s", req.razorpay_subscription_id)
+        raise HTTPException(400, "Invalid payment signature — possible tampering")
+
+    # Fetch subscription details to get user_id from notes
+    try:
+        sub = fetch_subscription(req.razorpay_subscription_id)
+        notes = sub.get("notes") or {}
+        user_id  = notes.get("user_id", "")
+        plan_key = notes.get("plan_key", "")
+        plan     = plan_key.split("_")[0] if plan_key else "builder"
+        _upsert_razorpay_subscription(req.razorpay_subscription_id, user_id, plan, sub)
+    except Exception as exc:
+        log.warning("[PAYMENTS] DB upsert failed (non-blocking): %s", exc)
+
+    log.info("[PAYMENTS] Payment verified: sub=%s", req.razorpay_subscription_id[:12])
+    return {"ok": True, "subscription_id": req.razorpay_subscription_id}
+
+
+@app.post("/api/webhooks/razorpay")
+async def razorpay_webhook(request: Request) -> dict:
+    """
+    Razorpay webhook handler — updates user_subscriptions on subscription events.
+
+    Events handled: subscription.charged, subscription.cancelled, payment.failed
+
+    Set in Razorpay Dashboard → Webhooks → Add New Webhook:
+      URL:    https://your-app.up.railway.app/api/webhooks/razorpay
+      Events: subscription.charged, subscription.cancelled, payment.failed
+      Secret: set RAZORPAY_WEBHOOK_SECRET in Railway env vars
+
+    Razorpay sends X-Razorpay-Signature header with HMAC-SHA256 of the body.
+    """
+    import json as _json
+
+    body      = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+
+    from packages.tools.razorpay_client import verify_webhook_signature
+    if not verify_webhook_signature(body, signature):
+        raise HTTPException(401, "Invalid Razorpay webhook signature")
+
+    try:
+        payload   = _json.loads(body)
+        evt_type  = payload.get("event", "")
+        entity    = payload.get("payload", {})
+
+        sub_entity = entity.get("subscription", {}).get("entity", {})
+        sub_id     = sub_entity.get("id", "")
+        notes      = sub_entity.get("notes") or {}
+        user_id    = notes.get("user_id", "")
+        plan_key   = notes.get("plan_key", "")
+        plan       = plan_key.split("_")[0] if plan_key else "builder"
+
+        if evt_type == "subscription.charged":
+            _upsert_razorpay_subscription(sub_id, user_id, plan, sub_entity)
+        elif evt_type == "subscription.cancelled":
+            _cancel_razorpay_subscription(sub_id)
+        elif evt_type == "payment.failed":
+            log.warning("[WEBHOOK] payment.failed for sub=%s user=%s", sub_id[:12], user_id[:8])
+
+        return {"ok": True, "event": evt_type}
+    except Exception as exc:
+        log.exception("[WEBHOOK] Razorpay webhook error: %s", exc)
         raise HTTPException(500, str(exc))
 
 
-def _upsert_subscription(data: dict) -> None:
+def _upsert_razorpay_subscription(
+    sub_id: str, user_id: str, plan: str, sub: dict,
+) -> None:
     from packages.db.client import get_db, is_supabase_connected
-    if not is_supabase_connected():
+    if not is_supabase_connected() or not user_id:
         return
     db = get_db()
-    custom = data.get("custom_data") or {}
-    user_id = custom.get("user_id")  # set this when creating Paddle checkout
-    if not user_id:
-        return
-    plan = custom.get("plan", "builder")
-    items = data.get("items", [])
-    price_id = items[0]["price"]["id"] if items else None
-    billing   = (items[0].get("price", {}).get("billing_cycle", {}).get("interval", "month")) if items else "month"
     try:
         db.table("user_subscriptions").upsert({
-            "user_id":               user_id,
-            "paddle_subscription_id": data.get("id"),
-            "paddle_customer_id":    data.get("customer_id"),
-            "plan":                  plan,
-            "status":                data.get("status", "active"),
-            "price_id":              price_id,
-            "billing_interval":      billing,
-            "current_period_end":    data.get("current_billing_period", {}).get("ends_at"),
-            "cancel_at_period_end":  data.get("scheduled_change", {}).get("action") == "cancel",
-        }, on_conflict="paddle_subscription_id").execute()
-        # Update the user's plan in their profile
+            "user_id":                  user_id,
+            "razorpay_subscription_id": sub_id,
+            "plan":                     plan,
+            "status":                   sub.get("status", "active"),
+            "billing_interval":         sub.get("plan_id", ""),
+            "current_period_end":       sub.get("current_end"),
+            "cancel_at_period_end":     sub.get("cancel_at_cycle_end", False),
+        }, on_conflict="razorpay_subscription_id").execute()
         db.table("user_profiles").update({"plan": plan}).eq("id", user_id).execute()
     except Exception as exc:
-        log.warning("[WEBHOOK] upsert_subscription failed: %s", exc)
+        log.warning("[WEBHOOK] _upsert_razorpay_subscription failed: %s", exc)
 
 
-def _cancel_subscription(data: dict) -> None:
+def _cancel_razorpay_subscription(sub_id: str) -> None:
     from packages.db.client import get_db, is_supabase_connected
     if not is_supabase_connected():
         return
@@ -869,9 +953,9 @@ def _cancel_subscription(data: dict) -> None:
         db.table("user_subscriptions").update({
             "status": "cancelled",
             "cancel_at_period_end": True,
-        }).eq("paddle_subscription_id", data.get("id")).execute()
+        }).eq("razorpay_subscription_id", sub_id).execute()
     except Exception as exc:
-        log.warning("[WEBHOOK] cancel_subscription failed: %s", exc)
+        log.warning("[WEBHOOK] _cancel_razorpay_subscription failed: %s", exc)
 
 
 @app.post("/api/ventures/{venture_id}/deploy")
