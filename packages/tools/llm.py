@@ -158,7 +158,9 @@ MODEL_REGISTRY: dict[str, tuple[str, str]] = {
     # ── Governance ────────────────────────────────────────────────────────────
     # CEO uses Haiku by default (see _CEO_MODEL above). Sonnet reserved for Engineering.
     "GRAND_CEO":           ("anthropic", _CEO_MODEL),
-    "LEGAL_AGENT":         ("anthropic", _HAIKU),
+    # Legal Agent uses Sonnet: veto power requires best-in-class reasoning and instruction following.
+    # Haiku was producing truncated/malformed JSON responses for complex compliance reviews.
+    "LEGAL_AGENT":         ("anthropic", "claude-sonnet-4-6"),
     "REVENUE_ENGINE":      ("anthropic", _HAIKU),
     # Legacy
     "CEO_NICHE_SCOUT":     ("anthropic", _CEO_MODEL),

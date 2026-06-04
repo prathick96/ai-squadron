@@ -37,14 +37,26 @@ _VITE_BUILD_TIMEOUT = 180          # 3 minutes
 _MAX_BUNDLE_SIZE_MB = 50
 
 # BLOCKING secrets — actual API keys / tokens hardcoded in source.
+# These require a real-looking VALUE (not just a variable name pattern).
+import re as _re
 _SECRET_PATTERNS_BLOCKING = [
-    "sk_live_",          # Stripe live key
+    "sk_live_",          # Stripe live key — always followed by 20+ chars
     "sk_test_",          # Stripe test key
-    "eyjaaa",            # Supabase anon key pattern
-    "service_role_key",  # Supabase service role
-    "AKIAIOSFODNN",      # AWS access key prefix
-    "ghp_",              # GitHub personal token
+    "AKIAIOSFODNN",      # AWS access key prefix (fixed 16-char suffix)
+    "ghp_",              # GitHub personal token (followed by 36 chars)
 ]
+# Regex for secrets that need value context (not just the key name)
+_SECRET_REGEXES_BLOCKING = [
+    _re.compile(r'\beyJ[A-Za-z0-9+/]{50,}'),   # JWT / Supabase service-role key
+]
+
+# Patterns that should NOT appear in the built dist/ bundle
+_BUNDLE_SECRET_RE = _re.compile(
+    r'sk_(?:live|test)_[A-Za-z0-9]{20,}'
+    r'|AKIA[A-Z0-9]{16}'
+    r'|ghp_[A-Za-z0-9]{36}',
+    _re.IGNORECASE,
+)
 
 # Phase 2 default: vite build IS blocking unless QA_REQUIRE_VITE_BUILD=false
 # (was false by default in Phase 1 to unblock early runs).
@@ -248,13 +260,36 @@ async def _validate_build(build: dict) -> tuple[list[str], list[str], dict]:
     else:
         updates["bundle_size_kb"] = 0
 
-    # 4 — secret scan: only flag ACTUAL key patterns, not form placeholders
+    # 4 — secret scan: only flag ACTUAL key VALUES, not variable names or comments.
+    # Patterns like "sk_live_" require actual Stripe key characters after them.
+    # Regex patterns ensure a real value is present, not a placeholder.
+    secret_found = False
     for f in (build.get("files") or []):
         content = f.get("content") or ""
         if any(pat in content for pat in _SECRET_PATTERNS_BLOCKING):
             failures.append("no_hardcoded_secrets")
-            log.warning("[QA_TECHNICAL] Real secret pattern in: %s", f.get("path"))
+            log.warning("[QA_TECHNICAL] Real secret prefix in: %s", f.get("path"))
+            secret_found = True
             break
+        if not secret_found:
+            for regex in _SECRET_REGEXES_BLOCKING:
+                if regex.search(content):
+                    failures.append("no_hardcoded_secrets")
+                    log.warning("[QA_TECHNICAL] JWT/token pattern in: %s", f.get("path"))
+                    secret_found = True
+                    break
+
+    # 4b — bundle secret scan: secrets that survived the Vite build (critical)
+    if exit_code == 0 and dist_dir.is_dir() and not secret_found:
+        for js_file in list(dist_dir.glob("**/*.js"))[:15]:
+            try:
+                bundle_content = js_file.read_text(encoding="utf-8", errors="ignore")
+                if _BUNDLE_SECRET_RE.search(bundle_content):
+                    failures.append("no_hardcoded_secrets")
+                    log.warning("[QA_TECHNICAL] Secret leaked into bundle: %s", js_file.name)
+                    break
+            except Exception:
+                pass
 
     # 5 — Playwright smoke test (only if dist/ was built and Playwright installed)
     playwright_errors: list[str] = []

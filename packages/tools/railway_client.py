@@ -63,13 +63,39 @@ EXPOSE 8080
 CMD ["nginx", "-g", "daemon off;"]
 """
 
-# SPA nginx config — serves index.html for all unknown routes (client-side routing)
+# SPA nginx config — serves index.html for all unknown routes (client-side routing).
+# Includes hardened security headers and rate limiting for all deployed products.
 _NGINX_CONF = """\
+# Rate limiting: 30 req/s per IP, burst of 60 — protects against scraping and brute force
+limit_req_zone $binary_remote_addr zone=per_ip:10m rate=30r/s;
+
 server {
     listen 8080;
     server_name _;
     root /usr/share/nginx/html;
     index index.html;
+
+    # Hide nginx version from attackers
+    server_tokens off;
+
+    # ── Security headers ──────────────────────────────────────────────────
+    # Prevent clickjacking
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    # Prevent MIME-type sniffing
+    add_header X-Content-Type-Options "nosniff" always;
+    # Block reflected XSS (legacy browsers)
+    add_header X-XSS-Protection "1; mode=block" always;
+    # Limit referrer information leakage
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    # Restrict browser features
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(self)" always;
+    # Content Security Policy — allows Supabase, PostHog, Paddle; blocks inline eval
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.paddle.com https://us.i.posthog.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co https://us.i.posthog.com https://sandbox-api.paddle.com https://api.paddle.com; frame-src https://sandbox-buy.paddle.com https://buy.paddle.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
+    # HSTS — tell browsers to always use HTTPS (1 year)
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # Apply rate limiting to all requests
+    limit_req zone=per_ip burst=60 nodelay;
 
     # React / Vue / Svelte SPA: unknown paths → index.html
     location / {
@@ -77,14 +103,29 @@ server {
     }
 
     # Cache hashed assets forever (Vite fingerprints filenames)
-    location ~* \\.(js|css|woff2|woff|ttf|eot|ico|png|jpg|jpeg|gif|svg|webp|map)$ {
+    # .map files are excluded from production — source maps expose source code
+    location ~* \\.(js|css|woff2|woff|ttf|eot|ico|png|jpg|jpeg|gif|svg|webp)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
         access_log off;
     }
 
-    # Health check endpoint for Railway
+    # Block source map files in production (security: don't expose minified source)
+    location ~* \\.map$ {
+        return 404;
+        access_log off;
+    }
+
+    # Block access to hidden files (.env, .git, etc.)
+    location ~ /\\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+
+    # Health check endpoint for Railway (no rate limit, no headers logged)
     location /healthz {
+        limit_req off;
         return 200 "ok";
         add_header Content-Type text/plain;
         access_log off;
@@ -94,6 +135,8 @@ server {
     gzip_types text/plain text/css application/javascript application/json
                image/svg+xml application/font-woff2;
     gzip_min_length 1024;
+    # Don't gzip already-compressed formats
+    gzip_disable "msie6";
 }
 """
 

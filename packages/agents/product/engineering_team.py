@@ -144,7 +144,9 @@ export default defineConfig({
     }, indent=2),
 
     # ------------------------------------------------------------------
-    # index.html — inline reset so the page looks clean before React mounts
+    # index.html — inline reset + security meta tags
+    # Primary security headers come from nginx (CSP, HSTS, etc.).
+    # Meta tags here are a belt-and-suspenders fallback for local dev.
     # ------------------------------------------------------------------
     "index.html": """\
 <!doctype html>
@@ -152,6 +154,13 @@ export default defineConfig({
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Security: prevent MIME sniffing -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <!-- Security: prevent clickjacking in browsers that don't honour the header -->
+    <meta http-equiv="X-Frame-Options" content="SAMEORIGIN" />
+    <!-- Security: CSP fallback for local dev (nginx provides the authoritative header) -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.paddle.com https://us.i.posthog.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://us.i.posthog.com https://sandbox-api.paddle.com https://api.paddle.com; frame-src https://sandbox-buy.paddle.com https://buy.paddle.com; frame-ancestors 'none';" />
     <title>App</title>
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -399,6 +408,15 @@ STRICT RULES:
   NEVER import from @supabase/supabase-js directly (use ../lib/supabase instead)
   Keep each file under 80 lines
   Use plain inline styles — no CSS modules, no Tailwind, no styled-components
+
+SECURITY RULES (enforced by QA and Security agents):
+  NEVER hardcode secrets, API keys, tokens, or passwords in source — use import.meta.env.VITE_*
+  NEVER use dangerouslySetInnerHTML — use React's text rendering instead
+  NEVER store auth tokens in localStorage — Supabase handles session storage securely
+  NEVER log sensitive fields: console.log(password), console.log(token), etc.
+  NEVER use string interpolation in database queries — use Supabase typed selectors
+  ALWAYS guard Supabase calls: if (!supabase) return (never assume it's configured)
+  ALWAYS handle errors gracefully — never expose stack traces or internal paths to users
 
 SUPABASE PATTERN (use exactly):
   import { supabase } from '../lib/supabase'
