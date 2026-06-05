@@ -9,8 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Settings:
-    # LLMs
-    GEMINI_API_KEY:           str  = os.getenv("GEMINI_API_KEY", "")
+    # LLMs — Anthropic only
     ANTHROPIC_API_KEY:        str  = os.getenv("ANTHROPIC_API_KEY", "")
 
     # Supabase
@@ -25,13 +24,6 @@ class Settings:
 
     # Market Intelligence
     TAVILY_API_KEY:           str  = os.getenv("TAVILY_API_KEY", "")
-    OPENROUTER_API_KEY:       str  = os.getenv("OPENROUTER_API_KEY", "")
-    OPENROUTER_BASE_URL:      str  = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-    DEEPINFRA_API_KEY:        str  = os.getenv("DEEPINFRA_API_KEY", "")
-    DEEPINFRA_BASE_URL:       str  = os.getenv("DEEPINFRA_BASE_URL", "https://api.deepinfra.com/v1/openai")
-    MOONSHOT_API_KEY:         str  = os.getenv("MOONSHOT_API_KEY", "")
-    MOONSHOT_BASE_URL:        str  = os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1")
-    KIMI_MODEL:               str  = os.getenv("KIMI_MODEL", "moonshotai/kimi-k2.6")
     DATAFORSEO_LOGIN:         str  = os.getenv("DATAFORSEO_LOGIN", "")
     DATAFORSEO_PASSWORD:      str  = os.getenv("DATAFORSEO_PASSWORD", "")
 
@@ -70,8 +62,6 @@ class Settings:
     def validate(self) -> list[str]:
         """Returns list of missing required keys. Empty list = ready to run."""
         missing = []
-        if not self.GEMINI_API_KEY:
-            missing.append("GEMINI_API_KEY")
         if not self.ANTHROPIC_API_KEY:
             missing.append("ANTHROPIC_API_KEY")
         if not self.SUPABASE_URL:

@@ -2,7 +2,7 @@
 packages/agents/product/product_vp.py
 Product VP — department head for all SaaS and affiliate builds.
 
-Model:   gemini-2.0-flash
+Model:   claude-haiku-4-5-20251001
 Input:   VentureBrief from Grand CEO
 Output:  Product strategy memo routed to Product Manager
 

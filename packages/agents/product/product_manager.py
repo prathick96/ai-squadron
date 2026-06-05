@@ -2,7 +2,7 @@
 packages/agents/product/product_manager.py
 Product Manager — product strategy → detailed TechSpec for Engineering.
 
-Model:   gemini-2.0-flash
+Model:   claude-haiku-4-5-20251001
 Input:   product_strategy from Product VP + venture_brief
 Output:  tech_spec with full feature set, data models, API routes
 

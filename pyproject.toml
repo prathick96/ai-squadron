@@ -11,10 +11,7 @@ dependencies = [
     # --- AI / orchestration ---
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
-    "langchain-google-genai>=2.0.0",
     "anthropic>=0.40.0",
-    "google-generativeai>=0.8.0",
-    "google-genai>=1.0.0",
     # --- Data / validation ---
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",

@@ -41,7 +41,7 @@ class MockLLMResponse:
 
 MOCK_RESEARCH_DOSSIER = {
     "recommended_primary_niche": "AI Productivity Tools",
-    "research_mode": "gemini_live",
+    "research_mode": "claude_live",
     "scout_reports": [
         {"scout_role": "trend_hunter",      "top_pick": "AI tools", "evidence_quality": "HIGH"},
         {"scout_role": "competitor_analyst", "top_pick": "AI tools", "evidence_quality": "HIGH"},

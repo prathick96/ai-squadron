@@ -1,8 +1,8 @@
 """
 tests/test_market_research.py
-Research Council node tests — Gemini live mode with mocked LLM calls.
+Research Council node tests — Claude live mode with mocked LLM calls.
 
-The research council now always runs live (no mock dossier fallback).
+The research council always runs live (no mock dossier fallback).
 Tests use patched call_llm and fetch_trend_snapshot so no real API calls are made.
 Run: pytest tests/test_market_research.py -v
 """
@@ -14,12 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 from packages.agents.governance.research_council import research_council_node
 from packages.state.agent_state import init_state
-from packages.tools.llm import kimi_available, LLMResponse
-
-
-def test_kimi_not_required_in_tests(monkeypatch):
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    assert kimi_available() is False
+from packages.tools.llm import LLMResponse
 
 
 _MOCK_TREND_SNAPSHOT = {
@@ -60,15 +55,14 @@ _MOCK_DEBATE = {
 async def _smart_scout_llm(agent_role: str, *args, **kwargs) -> LLMResponse:
     role = agent_role.upper()
     if "DEBATE" in role or "SYNTHESIZER" in role:
-        return LLMResponse(json.dumps(_MOCK_DEBATE), 50, 200, 3000, "gemini-2.5-pro")
-    # All scouts return the same mock report (different scout_role is set by the caller)
+        return LLMResponse(json.dumps(_MOCK_DEBATE), 50, 200, 3000, "claude-sonnet-4-6")
     report = {**_MOCK_SCOUT_REPORT, "scout_role": agent_role.lower()}
-    return LLMResponse(json.dumps(report), 20, 80, 1500, "gemini-2.5-pro")
+    return LLMResponse(json.dumps(report), 20, 80, 1500, "claude-sonnet-4-6")
 
 
 @pytest.mark.asyncio
-async def test_research_node_runs_live_with_gemini(monkeypatch):
-    """Research council uses Gemini 2.5 Pro and returns a real dossier."""
+async def test_research_node_runs_live_with_claude(monkeypatch):
+    """Research council uses Claude Sonnet and returns a real dossier."""
     state = init_state()
 
     with (
@@ -84,7 +78,7 @@ async def test_research_node_runs_live_with_gemini(monkeypatch):
     assert final.get("pipeline_stage") == "CEO_NODE"
     dossier = final.get("research_dossier") or {}
     assert dossier.get("recommended_primary_niche") == "AI receipt scanner for freelancers"
-    assert dossier.get("research_mode") == "gemini_live"
+    assert dossier.get("research_mode") == "claude_live"
     assert len(dossier.get("scout_reports", [])) == 5   # 5 scouts
     assert dossier.get("council_confidence", 0) > 0
     event_log = final.get("event_log", [])
@@ -120,9 +114,8 @@ async def test_research_council_handles_scout_failure_gracefully():
     async def flaky_llm(agent_role: str, *args, **kwargs) -> LLMResponse:
         nonlocal call_count
         call_count += 1
-        # Fail the first scout call, succeed on all others
         if call_count == 1:
-            raise RuntimeError("Simulated Gemini timeout")
+            raise RuntimeError("Simulated API timeout")
         return await _smart_scout_llm(agent_role, *args, **kwargs)
 
     with (
@@ -138,5 +131,4 @@ async def test_research_council_handles_scout_failure_gracefully():
     # Pipeline should still progress — 4 scouts succeeded
     assert final.get("pipeline_stage") == "CEO_NODE"
     dossier = final.get("research_dossier") or {}
-    # Niche comes from the successful scouts or fallback debate
-    assert dossier.get("research_mode") == "gemini_live"
+    assert dossier.get("research_mode") == "claude_live"

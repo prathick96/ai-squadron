@@ -1,13 +1,12 @@
 """
 packages/agents/governance/research_council.py
-Global Research Council — 5 parallel Gemini 2.5 Pro scouts + structured debate.
+Global Research Council — 5 parallel Claude Sonnet scouts + structured debate.
 
-Model:   Gemini 2.5 Pro (1M context, best reasoning for deep niche research)
-         Falls back to gemini-1.5-flash if 2.5-pro quota is hit or unavailable (404).
+Model:   Claude Sonnet 4.6 (deep reasoning for structured niche research + debate)
 Input:   Live trend snapshot (pytrends + Tavily) — NO mock data, NO hardcoded niches
 Output:  ResearchDossier handed to Grand CEO
 
-Key improvements (June 2026):
+Key design:
   - Each scout gets INDEPENDENT Tavily web search for its specific lens
     (competitor analyst searches reviews, skeptic searches failure cases, etc.)
   - Niche memory: exhausted/KILL'd niches fetched BEFORE scouts run and injected
@@ -18,14 +17,14 @@ Key improvements (June 2026):
   - Richer JSON schema: scouts must produce CITED evidence and specific moat gaps
   - Debate synthesiser cross-references scout evidence quality, not just picks
 
-Scouts (run in parallel, Gemini 2.5 Pro):
+Scouts (run in parallel, Claude Sonnet):
   1. Trend Hunter     — rising search volume, viral signals, platform trends
   2. Competitor Analyst — reverse-engineers top performers, finds moat gaps
   3. Skeptic          — challenges every pitch: risk, saturation, policy, CAC
   4. Audience Analyst — target persona, pain severity, willingness to pay
   5. Execution Scout  — build feasibility for our specific agent stack
 
-No mock fallback. Requires GEMINI_API_KEY. If the API call fails, the error
+No mock fallback. Requires ANTHROPIC_API_KEY. If the API call fails, the error
 propagates — pipelines run on real data or not at all.
 """
 from __future__ import annotations
@@ -298,7 +297,7 @@ async def research_council_node(state: AgentState) -> AgentState:
     dossier_body, debate_transcript, token_total, latency_total = (
         await _run_live_council(trend_json, exhausted_niches)
     )
-    mode = "gemini_live"
+    mode = "claude_live"
 
     payload = ResearchDossierPayload(
         venture_id=venture_id,
