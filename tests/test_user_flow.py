@@ -247,11 +247,11 @@ class TestPipelineRunEndpoint:
         assert "venture_id" in data
         assert data["status"] == "STARTED"
 
-    def test_run_with_media_department(self):
+    def test_run_with_media_department_rejected(self):
+        """MEDIA department is archived — API returns 422 (invalid literal)."""
         with patch("apps.api.main._run_pipeline_background", new_callable=AsyncMock):
             resp = client.post("/api/pipeline/run", json={"department": "MEDIA"})
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "STARTED"
+        assert resp.status_code == 422
 
     def test_run_with_explicit_venture_id(self):
         with patch("apps.api.main._run_pipeline_background", new_callable=AsyncMock):

@@ -58,12 +58,12 @@ _BUNDLE_SECRET_RE = _re.compile(
     _re.IGNORECASE,
 )
 
-# Phase 2 default: vite build IS blocking unless QA_REQUIRE_VITE_BUILD=false
-# (was false by default in Phase 1 to unblock early runs).
-# Now that we have a working scaffold that compiles, set the bar correctly.
-_REQUIRE_VITE_BUILD = os.getenv("QA_REQUIRE_VITE_BUILD", "false").lower() == "true"
+# Vite build MUST pass — a product that doesn't compile cannot be deployed.
+# Override with QA_REQUIRE_VITE_BUILD=false only for local dev/testing.
+_REQUIRE_VITE_BUILD = os.getenv("QA_REQUIRE_VITE_BUILD", "true").lower() == "true"
 
-# TypeScript check: run tsc --noEmit in addition to vite build
+# TypeScript strict check: run tsc --noEmit before vite build.
+# Disabled by default — the scaffold uses lenient tsconfig to tolerate LLM-generated code.
 _REQUIRE_TYPECHECK = os.getenv("QA_REQUIRE_TYPECHECK", "false").lower() == "true"
 
 _CRITIQUE_SYSTEM = """\

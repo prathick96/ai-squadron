@@ -449,7 +449,7 @@ async def _run_single_scout(
     tavily_context = ""
     if tavily_results:
         tavily_context = (
-            f"\n\nTAVILY WEB SEARCH RESULTS (use as evidence):\n"
+            "\n\nTAVILY WEB SEARCH RESULTS (use as evidence):\n"
             + json.dumps([
                 {"title": r.get("title", ""), "snippet": r.get("snippet", "")[:300]}
                 for r in tavily_results[:5]

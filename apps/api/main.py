@@ -106,7 +106,7 @@ class ReviewResolveBody(BaseModel):
 
 
 class PipelineRunBody(BaseModel):
-    department: Literal["PRODUCT", "MEDIA", "AUTO"] = "AUTO"
+    department: Literal["PRODUCT"] = "PRODUCT"  # Media archived — only PRODUCT
     venture_id: str | None = None
 
 

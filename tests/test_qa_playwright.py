@@ -217,66 +217,8 @@ async def test_qa_technical_skips_playwright_when_vite_fails(tmp_path, monkeypat
                for e in updates.get("playwright_errors", []))
 
 
-# ---------------------------------------------------------------------------
-# qa_compliance — copyright fingerprint check
-# ---------------------------------------------------------------------------
-
-class TestCopyrightFingerprintCheck:
-    def test_clears_when_no_file_path(self):
-        from packages.agents.media.qa_compliance import _copyright_fingerprint_check
-        ok, reason = _copyright_fingerprint_check({})
-        assert ok is True
-        assert reason == ""
-
-    def test_clears_when_file_missing_on_disk(self, tmp_path):
-        from packages.agents.media.qa_compliance import _copyright_fingerprint_check
-        ok, reason = _copyright_fingerprint_check(
-            {"file_path": str(tmp_path / "nonexistent.mp3")}
-        )
-        assert ok is True
-
-    def test_fails_when_file_suspiciously_small(self, tmp_path):
-        from packages.agents.media.qa_compliance import _copyright_fingerprint_check
-        tiny = tmp_path / "tiny.mp3"
-        tiny.write_bytes(b"\x00" * 100)   # 100 bytes < 1 KB threshold
-        ok, reason = _copyright_fingerprint_check({"file_path": str(tiny)})
-        assert ok is False
-        assert "bytes" in reason.lower()
-
-    def test_passes_for_normal_sized_audio(self, tmp_path):
-        from packages.agents.media.qa_compliance import _copyright_fingerprint_check
-        audio = tmp_path / "voice.mp3"
-        audio.write_bytes(b"\xff\xfb" + b"\x00" * 50_000)  # ~50 KB
-        ok, reason = _copyright_fingerprint_check({"file_path": str(audio)})
-        assert ok is True
-
-    def test_fails_for_oversized_audio(self, tmp_path):
-        from packages.agents.media.qa_compliance import _copyright_fingerprint_check
-        import unittest.mock
-        huge_path = tmp_path / "huge.mp3"
-        huge_path.touch()
-        # Mock stat to return a huge size without writing 500MB to disk
-        with unittest.mock.patch.object(
-            Path, "stat",
-            return_value=unittest.mock.MagicMock(st_size=600 * 1024 * 1024),
-        ):
-            ok, reason = _copyright_fingerprint_check({"file_path": str(huge_path)})
-        assert ok is False
-        assert "MB" in reason
-
-
-def test_copyright_check_included_in_compliance_checks():
-    """_validate_content always includes copyright_fingerprint in its checks list."""
-    from packages.agents.media.qa_compliance import _validate_content
-
-    content = {
-        "platform": "youtube",
-        "audio_asset": {"human_likeness_score": 0.92},
-        "seo_metadata": {"title": "Top 10 AI Tools for Productivity 2026"},
-        "video_asset": {"duration_sec": 480},
-    }
-    checks, _ = _validate_content(content)
-    assert "copyright_fingerprint" in checks
+# Media QA compliance tests removed — media pipeline archived.
+# qa_compliance.py is in archive/packages/agents/media/qa_compliance.py
 
 
 # ---------------------------------------------------------------------------

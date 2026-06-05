@@ -174,7 +174,6 @@ RETURN ONLY this JSON (no markdown, first char must be {{):
       "trend_evidence": "..."
     }}
   ],
-  "venture_id": "ven_{short_id}",
   "venture_type": "MICRO_SAAS | AFFILIATE_SITE",
   "department": "PRODUCT",
   "niche": "The rank-1 niche string",
@@ -216,18 +215,16 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
 
     debate    = dossier.get("debate_summary") or {}
     synthesis = debate.get("synthesis", "") if isinstance(debate, dict) else str(debate)
-    short_id  = uuid.uuid4().hex[:8]
 
     user_prompt = _USER_PROMPT_TEMPLATE.format(
         research_dossier=json.dumps(
             {k: v for k, v in dossier.items() if k != "debate_transcript"},
             indent=2,
         ),
-        primary_niche    = dossier.get("recommended_primary_niche", "unknown"),
+        primary_niche      = dossier.get("recommended_primary_niche", "unknown"),
         council_confidence = dossier.get("council_confidence", 0.0),
-        debate_synthesis = synthesis[:600] if synthesis else "No debate synthesis available",
-        exhausted_niches = ", ".join(exhausted[:20]) if exhausted else "none",
-        short_id         = short_id,
+        debate_synthesis   = synthesis[:600] if synthesis else "No debate synthesis available",
+        exhausted_niches   = ", ".join(exhausted[:20]) if exhausted else "none",
     )
 
     try:
@@ -279,15 +276,24 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
         )
         log.warning("[CEO_NODE] go_decision overridden to False — score %d < 70", total_score)
 
+    # ── CRITICAL: NEVER change venture_id — use the original from state ────────
+    # The LLM used to generate "venture_id": "ven_XXXXXXXX" in its response.
+    # This created a bifurcation: pipeline_runs used the original ID, but all
+    # build artifacts, QA reports, and deploys went under the new LLM ID.
+    # Result: every pipeline showed "No build found" because the UI queried the
+    # original ID but builds were written under the LLM-generated ID.
+    # Fix: always use state["venture_id"]. The LLM should not generate IDs.
+    brief_data["venture_id"] = venture_id
+
     brief_payload = VentureBriefPayload(**{
         k: v for k, v in brief_data.items()
         if k in VentureBriefPayload.model_fields
     })
 
     # ── CRITICAL: upsert venture BEFORE pipeline_run FK insert ───────────────
-    new_venture_id = brief_payload.venture_id
+    new_venture_id = venture_id   # same as original — no more bifurcation
     upsert_venture({
-        "venture_id":       new_venture_id,
+        "venture_id":       venture_id,
         "venture_type":     brief_payload.venture_type,
         "niche":            brief_payload.niche,
         "status":           "IDEATION",
@@ -330,16 +336,16 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
     event = make_event(
         event_type    = EventType.VENTURE_BRIEF_READY,
         source_agent  = AgentID.GRAND_CEO,
-        target_agent  = AgentID.PRODUCT_VP,   # product-only phase
+        target_agent  = AgentID.PRODUCT_VP,
         payload       = brief_payload,
         run_id        = run_id,
-        venture_id    = new_venture_id,
+        venture_id    = venture_id,
         pipeline_stage = "CEO_NODE",
         token_cost    = response.total_tokens,
         latency_ms    = response.latency_ms,
     )
 
-    log_agent_event(run_id, new_venture_id, "GRAND_CEO", "SUCCESS",
+    log_agent_event(run_id, venture_id, "GRAND_CEO", "SUCCESS",
                     tokens_used=response.total_tokens, latency_ms=response.latency_ms,
                     current_task=(
                         f"Primary: {brief_payload.niche} | "

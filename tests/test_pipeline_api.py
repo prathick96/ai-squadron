@@ -148,17 +148,18 @@ def test_pipeline_run_endpoint_returns_run_id():
     assert body["venture_id"].startswith("ven_")
 
 
-def test_pipeline_run_media_department():
+def test_pipeline_run_media_redirects_to_product():
+    """MEDIA department is archived � API rejects it (422 invalid literal)."""
     with patch("apps.api.main._run_pipeline_background", new=AsyncMock(return_value=None)):
         resp = client.post("/api/pipeline/run", json={"department": "MEDIA"})
-    assert resp.status_code == 200
+    assert resp.status_code == 422  # MEDIA not a valid Literal value
 
 
 def test_pipeline_run_with_explicit_venture_id():
     with patch("apps.api.main._run_pipeline_background", new=AsyncMock(return_value=None)):
         resp = client.post(
             "/api/pipeline/run",
-            json={"department": "AUTO", "venture_id": "ven_explicit_001"},
+            json={"department": "PRODUCT", "venture_id": "ven_explicit_001"},
         )
     assert resp.status_code == 200
     assert resp.json()["venture_id"] == "ven_explicit_001"
@@ -269,28 +270,5 @@ async def test_deployment_agent_uses_mock_when_no_token(monkeypatch):
     assert "railway.app" in deps[0].get("url", "")
 
 
-@pytest.mark.asyncio
-async def test_voice_agent_uses_mock_when_no_key(monkeypatch):
-    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
-    from packages.agents.media.voice_agent import voice_agent_node
-    from packages.state.agent_state import init_state
+# test_voice_agent_uses_mock_when_no_key removed — voice_agent is archived (media pipeline).
 
-    state = {
-        **init_state("ven_voice_test"),
-        "script_package": {
-            "hook": "Test hook",
-            "body_sections": ["Body text here"],
-            "cta": "Subscribe now",
-            "estimated_duration_sec": 120,
-            "word_count": 50,
-            "platform": "youtube",
-        },
-    }
-
-    with patch("packages.db.client.log_agent_event", return_value=None):
-        result = await voice_agent_node(state)
-
-    vp = result.get("voice_package") or {}
-    assert vp.get("duration_sec", 0) > 0
-    assert vp.get("human_likeness_score", 0) >= 0.85
-    assert vp.get("platform") == "youtube"

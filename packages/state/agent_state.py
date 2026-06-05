@@ -1,8 +1,10 @@
 """
 packages/state/agent_state.py
-Central state object that flows through every LangGraph node.
+Central state object that flows through the SaaS Product LangGraph.
 Every node reads and writes to this TypedDict. Immutable fields
 are only written once (run_id, venture_id, created_at).
+
+Media pipeline has been archived — only PRODUCT fields remain.
 """
 from __future__ import annotations
 
@@ -26,42 +28,8 @@ class LegalClearance(TypedDict, total=False):
     clearance_expires_at: str
 
 
-class ScriptPackage(TypedDict, total=False):
-    venture_id: str
-    platform: str
-    content_angle: str
-    hook: str
-    body_sections: list[str]
-    cta: str
-    word_count: int
-    estimated_duration_sec: int
-    hook_variants: list[str]
-
-
-class VoicePackage(TypedDict, total=False):
-    venture_id: str
-    audio_file_path: str
-    duration_sec: float
-    voice_id: str
-    human_likeness_score: float
-    provider: str
-
-
-class VideoPackage(TypedDict, total=False):
-    venture_id: str
-    video_file_path: str
-    resolution: str
-    duration_sec: float
-    has_captions: bool
-    caption_file_path: str | None
-    provider: str
-
-
-class ThumbnailPackage(TypedDict, total=False):
-    venture_id: str
-    variants: list[str]
-    selected_variant: str | None
-    provider: str
+# Media-specific sub-schemas (ScriptPackage, VoicePackage, VideoPackage,
+# ThumbnailPackage, ContentPackage) have been removed — media pipeline archived.
 
 
 class ResearchDossier(TypedDict, total=False):
@@ -120,17 +88,6 @@ class BuildArtifact(TypedDict, total=False):
     retry_patches_applied: list[str]
 
 
-class ContentPackage(TypedDict, total=False):
-    venture_id: str
-    platform: str
-    content_type: Literal["short_form", "long_form"]
-    script: dict[str, Any]
-    audio_asset: dict[str, Any]
-    video_asset: dict[str, Any]
-    thumbnail_asset: dict[str, Any]
-    seo_metadata: dict[str, Any]
-    is_retry: bool
-
 
 class QAReport(TypedDict, total=False):
     venture_id: str
@@ -153,30 +110,11 @@ class SecurityClearance(TypedDict, total=False):
     is_compliant: bool
 
 
-class AccountDistributionPlan(TypedDict, total=False):
-    venture_id: str
-    accounts: list[dict[str, Any]]
-    duplicate_content_window_hours: int
-    provisioned_at: str
-
-
 class DeploymentReceipt(TypedDict, total=False):
     venture_id: str
     deployments: list[dict[str, Any]]
     post_deployment_status: Literal["LIVE", "FAILED", "PARTIAL"]
 
-
-class CampaignPlan(TypedDict, total=False):
-    venture_id: str
-    campaigns: list[dict[str, Any]]
-    tracking_params: dict[str, str]
-
-
-class LocalizationMap(TypedDict, total=False):
-    venture_id: str
-    localizations: list[dict[str, Any]]
-    regions_covered: list[str]
-    estimated_incremental_reach: int
 
 
 class GrowthSignals(TypedDict, total=False):
@@ -194,59 +132,55 @@ class GrowthSignals(TypedDict, total=False):
 
 class AgentState(TypedDict, total=False):
     # ------------------------------------------------------------------
-    # Pipeline identity (set once at graph entry, never mutated)
+    # Pipeline identity (set once at graph entry, NEVER mutated mid-run)
+    # venture_id is assigned by init_state() and must not be changed by
+    # any agent — including the CEO. Changing it causes build artifacts
+    # to be written under a different ID than the pipeline_run record.
     # ------------------------------------------------------------------
-    run_id: str                        # UUID4 string
-    venture_id: str                    # Stable venture identifier
-    pipeline_stage: str                # Current node name
-    created_at: str                    # ISO 8601
+    run_id: str
+    venture_id: str
+    pipeline_stage: str
+    created_at: str
 
     # ------------------------------------------------------------------
-    # Department routing (set by Grand CEO)
+    # Department — always PRODUCT (media archived)
     # ------------------------------------------------------------------
-    department: Literal["PRODUCT", "MEDIA"] | None
+    department: Literal["PRODUCT"] | None
 
     # ------------------------------------------------------------------
     # Governance artifacts
     # ------------------------------------------------------------------
     research_dossier: ResearchDossier | None
     venture_brief: VentureBrief | None
+    niche_shortlist: list[dict[str, Any]] | None
 
     # ------------------------------------------------------------------
-    # Product department artifacts
+    # Product pipeline artifacts
     # ------------------------------------------------------------------
     tech_spec: TechSpec | None
     build_artifact: BuildArtifact | None
 
     # ------------------------------------------------------------------
-    # Media department artifacts (staged: script → voice → video → thumb)
+    # Quality + compliance artifacts
     # ------------------------------------------------------------------
-    script_package: ScriptPackage | None
-    voice_package: VoicePackage | None
-    video_package: VideoPackage | None
-    thumbnail_package: ThumbnailPackage | None
-    content_package: ContentPackage | None   # assembled final package
-
-    # ------------------------------------------------------------------
-    # Shared pipeline artifacts
-    # ------------------------------------------------------------------
-    legal_clearance: LegalClearance | None
     qa_report: QAReport | None
     security_clearance: SecurityClearance | None
-    account_distribution_plan: AccountDistributionPlan | None
-    deployment_receipt: DeploymentReceipt | None
-    campaign_plan: CampaignPlan | None
-    localization_map: LocalizationMap | None
-    growth_signals: GrowthSignals | None
-    published_urls: dict[str, str]           # platform → URL
-    channel_analytics: dict[str, Any] | None
+    security_report: dict[str, Any] | None   # OWASP findings + score
+    legal_clearance: LegalClearance | None
 
     # ------------------------------------------------------------------
-    # QA retry loop control
+    # Deployment + growth artifacts
     # ------------------------------------------------------------------
-    qa_target: Literal["engineering", "content"] | None
+    deployment_receipt: DeploymentReceipt | None
+    growth_signals: GrowthSignals | None
+    published_urls: dict[str, str]           # platform → URL
+
+    # ------------------------------------------------------------------
+    # QA + Security retry loop control
+    # ------------------------------------------------------------------
+    qa_target: Literal["engineering"] | None
     qa_retry_count: int
-    qa_max_retries: int                # Hard cap — default 3
+    qa_max_retries: int
 
     # ------------------------------------------------------------------
     # Revenue & lifecycle
@@ -283,37 +217,30 @@ def init_state(venture_id: str | None = None) -> AgentState:
         pipeline_stage="RESEARCH_NODE",
         created_at=datetime.now(timezone.utc).isoformat(),
 
-        # Department (set by Grand CEO after research)
-        department=None,
+        # Department — always PRODUCT (media archived)
+        department="PRODUCT",
 
-        # Governance artifacts
+        # Governance
         research_dossier=None,
         venture_brief=None,
+        niche_shortlist=None,
 
-        # Product department artifacts
+        # Product pipeline
         tech_spec=None,
         build_artifact=None,
 
-        # Media department artifacts
-        script_package=None,
-        voice_package=None,
-        video_package=None,
-        thumbnail_package=None,
-        content_package=None,
-
-        # Shared artifacts
-        legal_clearance=None,
+        # Quality + compliance
         qa_report=None,
         security_clearance=None,
-        account_distribution_plan=None,
+        security_report=None,
+        legal_clearance=None,
+
+        # Deployment + growth
         deployment_receipt=None,
-        campaign_plan=None,
-        localization_map=None,
         growth_signals=None,
         published_urls={},
-        channel_analytics=None,
 
-        # QA loop
+        # QA + Security retry loop
         qa_target=None,
         qa_retry_count=0,
         qa_max_retries=3,
