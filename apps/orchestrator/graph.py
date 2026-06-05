@@ -13,8 +13,6 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from packages.state.agent_state import AgentState
-
 log = logging.getLogger(__name__)
 
 
