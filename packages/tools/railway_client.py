@@ -468,20 +468,12 @@ def _make_tarball(build_dir: Path) -> bytes:
 # Upload + Deploy
 # ---------------------------------------------------------------------------
 
-# GraphQL mutation to create a pre-signed source upload slot.
-# Returns { id, url } where url is a temporary S3 pre-signed PUT URL.
-# The id is used as sourceUploadId in deploymentCreate.
-# This avoids the graphql-multipart-request-spec ordering requirement of the
-# legacy /deployments/uploads REST endpoint (which returned HTTP 400 with
-# "Misordered multipart fields; files should follow 'map'").
-_M_SOURCE_UPLOAD_CREATE = """
-mutation SourceUploadCreate {
-  sourceUploadCreate {
-    id
-    url
-  }
-}
-"""
+# Railway's REST upload endpoint.
+# Introspection of Railway's GraphQL schema confirmed there is NO GraphQL mutation
+# for source uploads (sourceUploadCreate does not exist — 182 mutations checked).
+# The upload is a REST multipart POST that follows the graphql-multipart-request-spec
+# field ordering: map field MUST precede the file field.
+_UPLOAD_URL = "https://backboard.railway.app/deployments/uploads"
 
 
 async def _upload_tarball(
@@ -490,44 +482,40 @@ async def _upload_tarball(
     tarball: bytes,
 ) -> str:
     """
-    Upload tarball to Railway via sourceUploadCreate GraphQL mutation.
+    Upload tarball to Railway's REST upload endpoint.
 
-    Flow:
-      1. sourceUploadCreate → { id, url }  (url is S3 pre-signed PUT endpoint)
-      2. PUT tarball directly to url        (no auth header — S3 uses the signature)
-      3. Return id for use in deploymentCreate
+    The endpoint uses graphql-multipart-request-spec field ordering:
+      1. 'map' field (JSON) — must come first
+      2. file field named by the map key
 
-    The old /deployments/uploads multipart endpoint requires graphql-multipart-request-spec
-    field ordering (operations → map → file) and returned HTTP 400 when only the file
-    field was sent without the preceding 'map' field.
+    Previous failed attempts:
+      - Sending only the file field → HTTP 400 "Misordered multipart fields;
+        files should follow 'map'"  (missing the map field)
+      - Using sourceUploadCreate GraphQL mutation → HTTP 400 "Cannot query field
+        sourceUploadCreate on type Mutation"  (that mutation does not exist)
+
+    httpx sends data= dict before files= dict in multipart, so map comes before file.
     """
-    # Step 1: create upload slot and get pre-signed URL
-    data      = await _gql(client, token, _M_SOURCE_UPLOAD_CREATE, {})
-    src       = data.get("sourceUploadCreate") or {}
-    upload_id = src.get("id", "")
-    upload_url = src.get("url", "")
+    import json as _json
 
-    if not upload_id or not upload_url:
-        raise RuntimeError(
-            f"Railway sourceUploadCreate returned unexpected response: {src}"
-        )
-    log.info("[RAILWAY] sourceUploadCreate id=%s url=%s…", upload_id[:12], upload_url[:60])
-
-    # Step 2: PUT tarball to pre-signed URL — S3 pre-signed URLs don't use the Bearer token
-    upload_resp = await client.put(
-        upload_url,
-        content=tarball,
-        headers={"Content-Type": "application/gzip"},
+    resp = await client.post(
+        _UPLOAD_URL,
+        data={"map": _json.dumps({"0": ["variables.file"]})},
+        files={"0": ("source.tar.gz", tarball, "application/gzip")},
+        headers={"Authorization": f"Bearer {token}"},
         timeout=180.0,
     )
-    if not upload_resp.is_success:
+    if not resp.is_success:
         raise RuntimeError(
-            f"Railway source upload PUT failed HTTP {upload_resp.status_code}: "
-            f"{upload_resp.text[:300]}"
+            f"Railway upload failed HTTP {resp.status_code}: {resp.text[:400]}"
         )
-
-    log.info("[RAILWAY] Upload PUT → HTTP %d (%.1f KB)", upload_resp.status_code, len(tarball) / 1024)
+    body = resp.json()
+    upload_id = body.get("uploadId") or body.get("id") or body.get("data", {}).get("id", "")
+    if not upload_id:
+        raise RuntimeError(f"Railway upload returned no uploadId: {body}")
+    log.info("[RAILWAY] Upload OK — uploadId=%s (%.1f KB)", upload_id[:16], len(tarball) / 1024)
     return upload_id
+
 
 
 _M_CREATE_DEPLOYMENT = """
