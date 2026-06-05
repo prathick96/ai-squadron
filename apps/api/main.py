@@ -958,6 +958,56 @@ def _cancel_razorpay_subscription(sub_id: str) -> None:
         log.warning("[WEBHOOK] _cancel_razorpay_subscription failed: %s", exc)
 
 
+@app.post("/api/pipeline/{run_id}/proceed")
+async def proceed_pipeline(run_id: str) -> dict:
+    """
+    Override a MANUAL_REVIEW gate and proceed to deployment.
+
+    When QA/Security/Legal blocks a pipeline (MANUAL_REVIEW), the operator can
+    acknowledge the issue and force-deploy the built SaaS anyway.
+    This calls the deploy endpoint directly, bypassing the stuck gate.
+    """
+    rec = registry.get(run_id)
+    if rec is None:
+        raise HTTPException(404, f"Run {run_id} not found in registry")
+    if rec.status not in ("MANUAL_REVIEW", "COMPLETED", "FAILED"):
+        raise HTTPException(409, f"Run {run_id} is currently {rec.status} — cannot proceed")
+
+    venture_id = rec.venture_id
+    log.info("[PROCEED] operator override | run=%s venture=%s", run_id, venture_id)
+
+    from packages.tools.railway_client import deploy_to_railway, railway_available
+    from packages.db.pipeline import get_build_path_for_venture
+
+    if not railway_available():
+        raise HTTPException(503, "RAILWAY_TOKEN not configured — cannot deploy")
+
+    # Find the build path for this venture
+    build_path = get_build_path_for_venture(venture_id)
+    if not build_path:
+        raise HTTPException(404, f"No build found for {venture_id} — engineering must run first")
+
+    from pathlib import Path
+    try:
+        url = await deploy_to_railway(venture_id, Path(build_path))
+    except Exception as exc:
+        raise HTTPException(500, f"Deploy failed: {exc}")
+
+    # Update venture status to LIVE
+    try:
+        from packages.db.client import get_db, is_supabase_connected
+        if is_supabase_connected():
+            get_db().table("ventures").update({
+                "live_url": url, "status": "LIVE",
+            }).eq("venture_id", venture_id).execute()
+    except Exception:
+        pass
+
+    registry.complete(run_id, "DEPLOYMENT_NODE", "COMPLETED", None)
+    log.info("[PROCEED] Deployed via override | venture=%s url=%s", venture_id, url)
+    return {"ok": True, "url": url, "venture_id": venture_id}
+
+
 @app.post("/api/ventures/{venture_id}/deploy")
 async def deploy_venture(venture_id: str) -> dict:
     """

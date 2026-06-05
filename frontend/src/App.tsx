@@ -20,7 +20,7 @@ import Landing      from './pages/Landing'
 import Pricing      from './pages/Pricing'
 import Auth         from './pages/Auth'
 import Onboarding    from './pages/Onboarding'
-import UserDashboard from './pages/UserDashboard'
+// UserDashboard import removed — using inline placeholder below
 import Terms        from './pages/legal/Terms'
 import Privacy      from './pages/legal/Privacy'
 import Refund       from './pages/legal/Refund'

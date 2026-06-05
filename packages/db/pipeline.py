@@ -382,3 +382,26 @@ def persist_niche_evaluation(
                  niche, sum(scores.values()), go_decision)
     except Exception as exc:
         log.debug("[pipeline] persist_niche_evaluation failed: %s", exc)
+
+
+def get_build_path_for_venture(venture_id: str) -> str | None:
+    """
+    Return the filesystem build path for a venture, checking:
+    1. /tmp/squadron-builds/{venture_id}/ (live disk — fastest)
+    2. build_artifacts table in Supabase (survives Railway restarts)
+    """
+    import os
+    from pathlib import Path
+
+    builds_root = Path(os.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
+    disk_path = builds_root / venture_id
+    if disk_path.is_dir():
+        return str(disk_path)
+
+    artifact = fetch_build_artifact(venture_id)
+    if artifact:
+        stored = artifact.get("build_path", "")
+        if stored and Path(stored).is_dir():
+            return stored
+
+    return None

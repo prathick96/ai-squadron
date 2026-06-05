@@ -89,7 +89,7 @@ export type PipelineRunStatus =
 export type PipelineRun = {
   run_id: string;
   venture_id: string;
-  department: "PRODUCT" | "MEDIA" | "AUTO";
+  department: "PRODUCT";
   status: PipelineRunStatus;
   current_stage: string;
   started_at: string;
@@ -190,13 +190,25 @@ export const api = {
       `/api/builds/${encodeURIComponent(venture_id)}/file?path=${encodeURIComponent(path)}`
     ),
 
-  // Week 5 — pipeline control
-  pipelineRun: (department: "PRODUCT" | "MEDIA" | "AUTO" = "AUTO", venture_id?: string) =>
+  // Pipeline control
+  pipelineRun: (venture_id?: string) =>
     post<{ run_id: string; venture_id: string; status: string }>("/api/pipeline/run", {
-      department,
+      department: "PRODUCT",
       venture_id: venture_id ?? null,
     }),
   pipelineStatus: (run_id: string) => get<PipelineRun>(`/api/pipeline/${run_id}`),
   pipelineRecent: () =>
     get<{ runs: PipelineRun[]; count: number }>("/api/pipeline/recent"),
+
+  // Manual review override — proceed anyway (deploy directly, skip stuck gate)
+  proceedPipeline: (run_id: string) =>
+    post<{ ok: boolean; url: string; venture_id: string }>(
+      `/api/pipeline/${encodeURIComponent(run_id)}/proceed`, {}
+    ),
+
+  // Deploy a specific venture to Railway
+  deployVenture: (venture_id: string) =>
+    post<{ ok: boolean; url: string; venture_id: string }>(
+      `/api/ventures/${encodeURIComponent(venture_id)}/deploy`, {}
+    ),
 };

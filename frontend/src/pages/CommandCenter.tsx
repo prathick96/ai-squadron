@@ -1,249 +1,326 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+/**
+ * CommandCenter.tsx — AI Squadron operations hub
+ *
+ * Layout:
+ *   TopBar   → key metrics + Launch button
+ *   Hero     → active pipeline with stage tracker + decision card when paused
+ *   History  → recent runs (compact)
+ *   Bottom   → Portfolio (left)  +  Agent health (right)
+ */
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   api,
   type AgentRow,
   type ConfidenceReport,
-  type ManualReviewItem,
   type PipelineRun,
   type PortfolioSlot,
   type RevenueSummary,
   type Venture,
-} from "../api";
+} from '../api'
 
-function formatUsd(n: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(n);
+// ─── Colour tokens ────────────────────────────────────────────────────────────
+const C = {
+  bg:         '#080810',
+  panel:      '#0d0d1a',
+  panelAlt:   '#111128',
+  border:     '#1e1e3a',
+  borderHover:'#2e2e5a',
+  accent:     '#3ecf8e',
+  purple:     '#7c3aed',
+  purpleGlow: 'rgba(124,58,237,0.25)',
+  red:        '#ef4444',
+  orange:     '#f59e0b',
+  blue:       '#3b82f6',
+  fg:         '#e2e8f0',
+  fgMuted:    '#64748b',
+  fgDim:      '#334155',
+}
+
+// ─── Pipeline stages (correct order after RCA fix) ────────────────────────────
+const STAGES = [
+  { id: 'RESEARCH_NODE',          label: 'Research',    icon: '🔍' },
+  { id: 'CEO_NODE',               label: 'CEO',         icon: '👔' },
+  { id: 'PRODUCT_VP_NODE',        label: 'Product VP',  icon: '📋' },
+  { id: 'PRODUCT_MANAGER_NODE',   label: 'PM',          icon: '📝' },
+  { id: 'ENGINEERING_NODE',       label: 'Engineering', icon: '⚙️' },
+  { id: 'QA_TECHNICAL_NODE',      label: 'QA',          icon: '🧪' },
+  { id: 'SECURITY_NODE',          label: 'Security',    icon: '🛡️' },
+  { id: 'LEGAL_NODE',             label: 'Legal',       icon: '⚖️' },
+  { id: 'DEPLOYMENT_NODE',        label: 'Deploy',      icon: '🚀' },
+  { id: 'MARKETING_SEO_NODE',     label: 'Marketing',   icon: '📢' },
+  { id: 'PRODUCT_GROWTH_NODE',    label: 'Growth',      icon: '📈' },
+]
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function usd(n: number) {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n)
 }
 
 function elapsed(iso: string): string {
-  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (secs < 60) return `${secs}s`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
 }
 
-const PRODUCT_STAGES = [
-  "RESEARCH_NODE", "CEO_NODE", "PRODUCT_VP_NODE", "PRODUCT_MANAGER_NODE",
-  "ENGINEERING_NODE", "QA_TECHNICAL_NODE", "LEGAL_NODE", "SECURITY_NODE",
-  "ACCOUNT_DISTRIBUTION_NODE", "DEPLOYMENT_NODE", "MARKETING_SEO_NODE", "PRODUCT_GROWTH_NODE",
-];
-
-const MEDIA_STAGES = [
-  "RESEARCH_NODE", "CEO_NODE", "MEDIA_VP_NODE", "SCRIPT_NODE", "VOICE_NODE",
-  "VIDEO_NODE", "THUMBNAIL_NODE", "SEO_METADATA_NODE", "QA_COMPLIANCE_NODE",
-  "LEGAL_NODE", "SECURITY_NODE", "ACCOUNT_DISTRIBUTION_NODE",
-  "PUBLISHING_NODE", "ANALYTICS_NODE", "ANTI_BAN_NODE", "MEDIA_GROWTH_NODE",
-];
-
-function stageIndex(run: PipelineRun): number {
-  const stages = run.department === "MEDIA" ? MEDIA_STAGES : PRODUCT_STAGES;
-  const idx = stages.indexOf(run.current_stage);
-  return idx >= 0 ? idx : 0;
+function stageIdx(current: string): number {
+  return Math.max(0, STAGES.findIndex(s => s.id === current))
 }
 
-function PipelineStatusBadge({ status }: { status: PipelineRun["status"] }) {
-  const colors: Record<string, string> = {
-    STARTED: "#888",
-    RUNNING: "#4af",
-    COMPLETED: "#4c4",
-    FAILED: "#f44",
-    MANUAL_REVIEW: "#fa4",
-  };
-  return (
-    <span
-      style={{
-        background: colors[status] ?? "#888",
-        color: "#000",
-        borderRadius: 4,
-        padding: "1px 6px",
-        fontSize: "0.7rem",
-        fontWeight: 700,
-        fontFamily: "monospace",
-      }}
-    >
-      {status}
-    </span>
-  );
-}
-
-function PipelineProgressBar({ run }: { run: PipelineRun }) {
-  const stages = run.department === "MEDIA" ? MEDIA_STAGES : PRODUCT_STAGES;
-  const idx = stageIndex(run);
-  const pct = run.status === "COMPLETED" ? 100 : Math.round(((idx + 1) / stages.length) * 100);
+// ─── Stage tracker component ──────────────────────────────────────────────────
+function PipelineStageTracker({ run }: { run: PipelineRun }) {
+  const idx = stageIdx(run.current_stage)
+  const done = run.status === 'COMPLETED'
+  const failed = run.status === 'FAILED'
+  const paused = run.status === 'MANUAL_REVIEW'
 
   return (
-    <div style={{ marginTop: 6 }}>
-      <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginBottom: 3 }}>
-        {run.current_stage.replace(/_NODE$/, "").replace(/_/g, " ")} — {pct}%
-      </div>
-      <div style={{ background: "#222", borderRadius: 3, height: 6, overflow: "hidden" }}>
-        <div
-          style={{
-            width: `${pct}%`,
-            height: "100%",
-            background: run.status === "FAILED" ? "#f44" :
-                        run.status === "MANUAL_REVIEW" ? "#fa4" : "var(--accent)",
-            transition: "width 0.4s ease",
-          }}
-        />
+    <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 0, minWidth: 720 }}>
+        {STAGES.map((stage, i) => {
+          const isActive  = i === idx && !done && !failed
+          const isRunning = isActive && (run.status === 'RUNNING' || run.status === 'STARTED')
+          const isPaused  = isActive && paused
+          const isDone    = done || i < idx
+          const isFailed  = failed && i === idx
+
+          let bg    = C.panelAlt
+          let color = C.fgDim
+          let border = C.border
+
+          if (isDone)    { bg = 'rgba(62,207,142,0.12)';  color = C.accent;  border = 'rgba(62,207,142,0.4)' }
+          if (isRunning) { bg = 'rgba(59,130,246,0.12)';  color = C.blue;    border = 'rgba(59,130,246,0.5)' }
+          if (isPaused)  { bg = 'rgba(245,158,11,0.12)';  color = C.orange;  border = 'rgba(245,158,11,0.5)' }
+          if (isFailed)  { bg = 'rgba(239,68,68,0.12)';   color = C.red;     border = 'rgba(239,68,68,0.5)'  }
+
+          return (
+            <div key={stage.id} style={{ display: 'flex', alignItems: 'center', flex: 1, minWidth: 0 }}>
+              <div style={{
+                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
+                padding: '8px 4px',
+                background: bg, border: `1px solid ${border}`, borderRadius: 8,
+                position: 'relative', transition: 'all 0.3s',
+                boxShadow: isRunning ? `0 0 12px rgba(59,130,246,0.3)` : isPaused ? `0 0 12px rgba(245,158,11,0.3)` : 'none',
+              }}>
+                <span style={{ fontSize: 16 }}>{stage.icon}</span>
+                <span style={{ fontSize: 9, fontWeight: 600, color, marginTop: 2, textAlign: 'center', lineHeight: 1.2 }}>
+                  {stage.label}
+                </span>
+                {isRunning && (
+                  <span style={{
+                    position: 'absolute', bottom: -6,
+                    width: 6, height: 6, borderRadius: '50%', background: C.blue,
+                    animation: 'pulse 1.2s infinite',
+                  }} />
+                )}
+                {isPaused && (
+                  <span style={{
+                    position: 'absolute', bottom: -6,
+                    fontSize: 8, color: C.orange, fontWeight: 800,
+                  }}>⏸</span>
+                )}
+              </div>
+              {i < STAGES.length - 1 && (
+                <div style={{
+                  width: 16, height: 2, flexShrink: 0,
+                  background: i < idx || done ? C.accent : C.border,
+                  transition: 'background 0.3s',
+                }} />
+              )}
+            </div>
+          )
+        })}
       </div>
     </div>
-  );
+  )
 }
 
-function ConfirmKillDialog({
-  venture,
-  onConfirm,
-  onCancel,
-  loading,
-  error,
-}: {
-  venture: Venture;
-  onConfirm: () => void;
-  onCancel: () => void;
-  loading: boolean;
-  error: string | null;
+// ─── Decision card for MANUAL_REVIEW ─────────────────────────────────────────
+function DecisionCard({ run, onProceed, onKill }: {
+  run: PipelineRun
+  onProceed: () => void
+  onKill: () => void
 }) {
+  const [proceeding, setProceeding] = useState(false)
+  const [killing,    setKilling]    = useState(false)
+  const [err,        setErr]        = useState('')
+
+  const stageLabel = STAGES.find(s => s.id === run.current_stage)?.label ?? run.current_stage
+
+  async function handleProceed() {
+    if (!confirm('Override this review and deploy the build as-is? The issue will be noted but NOT fixed.')) return
+    setProceeding(true); setErr('')
+    try {
+      await api.proceedPipeline(run.run_id)
+      onProceed()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Proceed failed')
+    } finally { setProceeding(false) }
+  }
+
+  async function handleKill() {
+    if (!confirm(`Kill venture ${run.venture_id}? This cannot be undone.`)) return
+    setKilling(true); setErr('')
+    try {
+      await api.killVenture(run.venture_id)
+      onKill()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Kill failed')
+    } finally { setKilling(false) }
+  }
+
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.75)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-      }}
-    >
-      <div
-        style={{
-          background: "#111",
-          border: "1px solid #f44",
-          borderRadius: 8,
-          padding: "24px 28px",
-          maxWidth: 420,
-          width: "90%",
-        }}
-      >
-        <h3 style={{ color: "#f44", marginTop: 0, fontFamily: "monospace" }}>Kill Venture?</h3>
-        <p style={{ fontSize: "0.85rem", marginBottom: 6 }}>
-          <strong className="mono">{venture.venture_id}</strong>
-        </p>
-        <p style={{ fontSize: "0.82rem", color: "var(--muted)", marginBottom: 16 }}>
-          Niche: {venture.niche || "—"} · Status: {venture.status}
-        </p>
-        <p style={{ fontSize: "0.82rem", marginBottom: 20 }}>
-          This will permanently mark the venture as <strong>KILLED</strong> and remove it from active
-          operations. This cannot be undone.
-        </p>
-        {error && (
-          <div
-            style={{
-              color: "#f66",
-              fontSize: "0.8rem",
-              marginBottom: 12,
-              fontFamily: "monospace",
-            }}
-          >
-            ⚠ {error}
+    <div style={{
+      marginTop: 16,
+      background: 'rgba(245,158,11,0.06)',
+      border: `1px solid rgba(245,158,11,0.4)`,
+      borderRadius: 10, padding: '16px 20px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span style={{ fontSize: 24, flexShrink: 0, marginTop: 2 }}>⏸</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: C.orange, marginBottom: 4 }}>
+            Pipeline paused — {stageLabel} requires your decision
           </div>
-        )}
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-          <button
-            onClick={onCancel}
-            disabled={loading}
-            style={{
-              background: "#222",
-              color: "var(--fg)",
-              border: "1px solid var(--border)",
-              borderRadius: 4,
-              padding: "6px 16px",
-              cursor: "pointer",
-              fontSize: "0.82rem",
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={loading}
-            style={{
-              background: loading ? "#333" : "#f44",
-              color: loading ? "var(--muted)" : "#fff",
-              border: "none",
-              borderRadius: 4,
-              padding: "6px 16px",
-              fontWeight: 700,
-              cursor: loading ? "not-allowed" : "pointer",
-              fontSize: "0.82rem",
-              fontFamily: "monospace",
-            }}
-          >
-            {loading ? "Killing…" : "Yes, Kill It"}
-          </button>
+          {run.last_error && (
+            <div style={{
+              fontSize: 12, color: '#fcd34d', fontFamily: 'monospace',
+              background: 'rgba(0,0,0,0.3)', borderRadius: 6,
+              padding: '8px 12px', marginBottom: 12, lineHeight: 1.6,
+              maxHeight: 80, overflowY: 'auto',
+            }}>
+              {run.last_error}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button
+              onClick={handleProceed}
+              disabled={proceeding || killing}
+              style={{
+                padding: '9px 20px', borderRadius: 8, border: 'none',
+                background: proceeding ? '#1a2a1a' : 'linear-gradient(135deg,#166534,#14532d)',
+                color: proceeding ? C.fgMuted : C.accent,
+                fontWeight: 700, fontSize: 13, cursor: proceeding ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', gap: 6,
+                boxShadow: proceeding ? 'none' : '0 0 16px rgba(62,207,142,0.2)',
+                transition: 'all 0.2s',
+              }}
+            >
+              {proceeding ? '⏳ Deploying…' : '→ Proceed Anyway'}
+            </button>
+            <button
+              onClick={handleKill}
+              disabled={proceeding || killing}
+              style={{
+                padding: '9px 20px', borderRadius: 8,
+                border: `1px solid rgba(239,68,68,0.5)`,
+                background: killing ? '#1a0000' : 'rgba(239,68,68,0.08)',
+                color: killing ? C.fgMuted : C.red,
+                fontWeight: 700, fontSize: 13, cursor: killing ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', gap: 6,
+              }}
+            >
+              {killing ? '⏳ Killing…' : '✕ Kill Pipeline'}
+            </button>
+            <span style={{ fontSize: 11, color: C.fgDim, maxWidth: 280, lineHeight: 1.5 }}>
+              "Proceed Anyway" deploys the build as-is, bypassing this gate.
+            </span>
+          </div>
+          {err && <div style={{ marginTop: 8, fontSize: 11, color: C.red, fontFamily: 'monospace' }}>⚠ {err}</div>}
         </div>
       </div>
     </div>
-  );
+  )
 }
 
-function ActiveRunCard({ run, onRefresh, onKill }: {
+// ─── Active pipeline hero card ─────────────────────────────────────────────────
+function ActivePipelineCard({ run, onRefresh, onKill }: {
   run: PipelineRun
   onRefresh: () => void
-  onKill: (v: { venture_id: string; status: string; niche: string }) => void
+  onKill: () => void
 }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  const [deployUrl, setDeployUrl] = useState<string | null>(null)
+  const [deploying, setDeploying] = useState(false)
+  const [deployErr, setDeployErr] = useState('')
 
-  const elapsedStr = elapsed(run.started_at);
-  const isDone = ["COMPLETED", "FAILED", "MANUAL_REVIEW"].includes(run.status);
-  const isLive = run.status === "COMPLETED";
+  const isActive   = run.status === 'RUNNING' || run.status === 'STARTED'
+  const isPaused   = run.status === 'MANUAL_REVIEW'
+  const isComplete = run.status === 'COMPLETED'
+  const isFailed   = run.status === 'FAILED'
+
+  const idx  = stageIdx(run.current_stage)
+  const pct  = isComplete ? 100 : Math.round(((idx + 1) / STAGES.length) * 100)
+  const el   = elapsed(run.started_at)
+
+  const statusColor = isActive ? C.blue : isComplete ? C.accent : isPaused ? C.orange : C.red
+
+  async function deployNow() {
+    setDeploying(true); setDeployErr('')
+    try {
+      const r = await api.deployVenture(run.venture_id)
+      setDeployUrl(r.url)
+      onRefresh()
+    } catch (e) {
+      setDeployErr(e instanceof Error ? e.message : 'Deploy failed')
+    } finally { setDeploying(false) }
+  }
 
   return (
-    <div
-      style={{
-        border: "1px solid var(--border)",
-        borderRadius: 6,
-        padding: "10px 14px",
-        marginBottom: 8,
-        background: "#111",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span className="mono" style={{ fontSize: "0.78rem" }}>
-          {run.venture_id}
-        </span>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <span style={{ fontSize: "0.72rem", color: "var(--muted)" }}>{elapsedStr}</span>
-          <PipelineStatusBadge status={run.status} />
-          <span
-            style={{
-              fontSize: "0.72rem",
-              background: "#1a2a1a",
-              color: "var(--accent)",
-              padding: "1px 5px",
-              borderRadius: 3,
-              fontFamily: "monospace",
-            }}
-          >
-            {run.department}
-          </span>
-          {/* Kill button — inline, only for non-live terminal runs */}
-          {isDone && !isLive && (
+    <div style={{
+      background: C.panel, border: `1px solid ${C.border}`,
+      borderRadius: 12, padding: '20px 24px',
+      boxShadow: isActive ? `0 0 0 1px rgba(59,130,246,0.2), 0 4px 24px rgba(59,130,246,0.08)` :
+                 isPaused ? `0 0 0 1px rgba(245,158,11,0.2)` : 'none',
+    }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+            <span style={{
+              display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+              background: statusColor,
+              boxShadow: isActive ? `0 0 8px ${statusColor}` : 'none',
+              animation: isActive ? 'pulse 1.2s infinite' : 'none',
+            }} />
+            <span style={{ fontFamily: 'monospace', fontSize: 13, color: C.fgMuted }}>
+              {run.venture_id}
+            </span>
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+              background: `${statusColor}22`, color: statusColor, fontFamily: 'monospace',
+            }}>
+              {run.status}
+            </span>
+          </div>
+          <div style={{ fontSize: 11, color: C.fgDim, fontFamily: 'monospace' }}>
+            {el} · {pct}% complete
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {isComplete && !deployUrl && (
             <button
-              onClick={() => onKill({ venture_id: run.venture_id, status: run.status, niche: "" })}
-              title="Kill this venture"
+              onClick={deployNow}
+              disabled={deploying}
               style={{
-                background: "#1a0000", color: "#f66", border: "1px solid #f44",
-                borderRadius: 4, padding: "1px 8px", fontSize: "0.68rem",
-                fontWeight: 700, cursor: "pointer", fontFamily: "monospace",
+                padding: '7px 18px', borderRadius: 8, border: 'none',
+                background: deploying ? '#1a1a2e' : 'linear-gradient(135deg,#7c3aed,#6d28d9)',
+                color: deploying ? C.fgMuted : '#fff',
+                fontWeight: 700, fontSize: 12, cursor: deploying ? 'not-allowed' : 'pointer',
+                boxShadow: deploying ? 'none' : '0 0 16px rgba(124,58,237,0.3)',
+              }}
+            >
+              {deploying ? '⏳ Deploying…' : '🚀 Launch Product'}
+            </button>
+          )}
+          {!isComplete && !isPaused && (
+            <button
+              onClick={onKill}
+              style={{
+                padding: '5px 12px', borderRadius: 6,
+                border: `1px solid rgba(239,68,68,0.4)`,
+                background: 'rgba(239,68,68,0.06)', color: C.red,
+                fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'monospace',
               }}
             >
               Kill
@@ -252,658 +329,569 @@ function ActiveRunCard({ run, onRefresh, onKill }: {
         </div>
       </div>
 
-      <PipelineProgressBar run={run} />
+      {/* Stage tracker */}
+      <PipelineStageTracker run={run} />
 
-      {run.last_error && (
-        <div
-          style={{
-            marginTop: 6,
-            fontSize: "0.72rem",
-            color: "#f66",
-            fontFamily: "monospace",
-          }}
-        >
-          ⚠ {run.last_error.slice(0, 120)}
-        </div>
-      )}
+      {/* Progress bar */}
+      <div style={{ marginTop: 12, background: '#1a1a2e', borderRadius: 4, height: 4, overflow: 'hidden' }}>
+        <div style={{
+          width: `${pct}%`, height: '100%',
+          background: isFailed ? C.red : isPaused ? C.orange : isComplete ? C.accent : C.blue,
+          transition: 'width 0.6s ease',
+        }} />
+      </div>
 
-      {run.recent_events.length > 0 && (
-        <div style={{ marginTop: 6 }}>
-          {run.recent_events.slice(-3).map((ev, i) => (
-            <div
-              key={i}
-              style={{
-                fontSize: "0.7rem",
-                color: "var(--muted)",
-                fontFamily: "monospace",
-                lineHeight: 1.5,
-              }}
-            >
-              › {String((ev as Record<string, unknown>).event_type ?? JSON.stringify(ev)).slice(0, 60)}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ── Product actions (COMPLETED or MANUAL_REVIEW PRODUCT runs) ─────── */}
-      {run.department === "PRODUCT" && (run.status === "COMPLETED" || run.status === "MANUAL_REVIEW") && (
-        <ProductActions ventureId={run.venture_id} onRefresh={onRefresh} />
-      )}
-    </div>
-  );
-}
-
-/** Separate component so it can hold its own deploy state without re-rendering the whole card */
-function ProductActions({ ventureId, onRefresh }: { ventureId: string; onRefresh: () => void }) {
-  const [deploying, setDeploying] = useState(false);
-  const [liveUrl,   setLiveUrl]   = useState<string | null>(null);
-  const [deployErr, setDeployErr] = useState<string | null>(null);
-
-  async function launchProduct() {
-    setDeploying(true);
-    setDeployErr(null);
-    try {
-      const res = await fetch(`/api/ventures/${encodeURIComponent(ventureId)}/deploy`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail ?? `Deploy failed (${res.status})`);
-      setLiveUrl(data.url);
-      onRefresh();   // refresh ventures list so live_url appears in portfolio
-    } catch (e) {
-      setDeployErr(e instanceof Error ? e.message : "Deploy failed");
-    } finally {
-      setDeploying(false);
-    }
-  }
-
-  return (
-    <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-
-      {/* Launch Product button — prominent green CTA */}
-      {liveUrl ? (
+      {/* Live URL banner */}
+      {deployUrl && (
         <a
-          href={liveUrl}
-          target="_blank"
-          rel="noreferrer"
+          href={deployUrl} target="_blank" rel="noreferrer"
           style={{
-            display: "inline-flex", alignItems: "center", gap: 8,
-            padding: "8px 18px", borderRadius: 6, textDecoration: "none",
-            background: "linear-gradient(135deg,#166534,#14532d)",
-            border: "1px solid #4ade80", color: "#4ade80",
-            fontWeight: 700, fontSize: "0.82rem", fontFamily: "monospace",
-            boxShadow: "0 0 12px rgba(74,222,128,0.2)",
+            display: 'flex', alignItems: 'center', gap: 10, marginTop: 14,
+            padding: '10px 16px', borderRadius: 8, textDecoration: 'none',
+            background: 'rgba(62,207,142,0.08)', border: `1px solid rgba(62,207,142,0.3)`,
+            color: C.accent, fontWeight: 700, fontSize: 13,
           }}
         >
-          🟢 Launch Product →
-          <span style={{ fontSize: "0.7rem", fontWeight: 400, color: "#86efac", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {liveUrl}
+          <span>🟢 Live →</span>
+          <span style={{ fontSize: 11, fontWeight: 400, color: '#86efac', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {deployUrl}
           </span>
         </a>
-      ) : (
-        <button
-          onClick={launchProduct}
-          disabled={deploying}
-          style={{
-            display: "inline-flex", alignItems: "center", gap: 8,
-            padding: "8px 18px", borderRadius: 6, border: "none",
-            background: deploying
-              ? "#1a1a2e"
-              : "linear-gradient(135deg,#7c3aed,#6d28d9)",
-            color: deploying ? "var(--muted)" : "#fff",
-            fontWeight: 700, fontSize: "0.82rem", fontFamily: "monospace",
-            cursor: deploying ? "not-allowed" : "pointer",
-            alignSelf: "flex-start",
-            boxShadow: deploying ? "none" : "0 0 16px rgba(124,58,237,0.3)",
-            transition: "all 0.2s",
-          }}
-        >
-          {deploying ? (
-            <>⏳ Deploying to Railway..</>
-          ) : (
-            <>🚀 Launch Product</>
-          )}
-        </button>
       )}
 
-      {deployErr && (
-        <div style={{ fontSize: "0.72rem", color: "#f66", fontFamily: "monospace" }}>
-          ⚠ {deployErr}
+      {/* Error line */}
+      {run.last_error && !isPaused && (
+        <div style={{ marginTop: 10, fontSize: 11, color: C.red, fontFamily: 'monospace', lineHeight: 1.5 }}>
+          ⚠ {run.last_error.slice(0, 160)}
         </div>
       )}
 
-      {/* Secondary: build inspection links */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <a
-          href={`/api/builds/${ventureId}`}
-          target="_blank"
-          rel="noreferrer"
-          style={{ fontSize: "0.68rem", padding: "2px 8px", borderRadius: 4, border: "1px solid #1e1e3a", background: "#0a0a1a", color: "#64748b", textDecoration: "none", fontFamily: "monospace" }}
-        >
-          📁 Build files
-        </a>
-        <a
-          href={`/api/builds/${ventureId}/download`}
-          style={{ fontSize: "0.68rem", padding: "2px 8px", borderRadius: 4, border: "1px solid #1e1e3a", background: "#0a0a1a", color: "#64748b", textDecoration: "none", fontFamily: "monospace" }}
-        >
-          ⬇ Download ZIP
-        </a>
-        <span style={{ fontSize: "0.62rem", color: "#334155", fontFamily: "monospace" }}>
-          local: npm install &amp;&amp; npm run dev
-        </span>
-      </div>
-    </div>
-  );
-}
+      {/* Recent events */}
+      {run.recent_events.length > 0 && !isPaused && (
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {run.recent_events.slice(-3).map((ev, i) => (
+            <div key={i} style={{ fontSize: 10, color: C.fgDim, fontFamily: 'monospace' }}>
+              › {String((ev as Record<string, unknown>).event_type ?? JSON.stringify(ev)).replace(/_/g, ' ').slice(0, 70)}
+            </div>
+          ))}
+        </div>
+      )}
 
-export default function App() {
-  const [agents, setAgents] = useState<AgentRow[]>([]);
-  const [revenue, setRevenue] = useState<RevenueSummary | null>(null);
-  const [slots, setSlots] = useState<PortfolioSlot[]>([]);
-  const [trends, setTrends] = useState<
-    { topic: string; score: number; region: string; covered: boolean }[]
-  >([]);
-  const [coveragePct, setCoveragePct] = useState(0);
-  const [alerts, setAlerts] = useState<
-    { severity: string; platform: string; message: string }[]
-  >([]);
-  const [plan, setPlan] = useState<{ headline: string; actions: string[] } | null>(null);
-  const [confidence, setConfidence] = useState<ConfidenceReport | null>(null);
-  const [reviews, setReviews] = useState<ManualReviewItem[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [dataSource, setDataSource] = useState("mock");
-  const [lastTick, setLastTick] = useState<string>("");
+      {/* Build actions when complete */}
+      {isComplete && (
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <a href={`/api/builds/${run.venture_id}`} target="_blank" rel="noreferrer"
+            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.fgMuted, textDecoration: 'none', fontFamily: 'monospace' }}>
+            📁 Build files
+          </a>
+          <a href={`/api/builds/${run.venture_id}/download`}
+            style={{ fontSize: 11, padding: '4px 10px', borderRadius: 5, border: `1px solid ${C.border}`, background: C.panelAlt, color: C.fgMuted, textDecoration: 'none', fontFamily: 'monospace' }}>
+            ⬇ Download ZIP
+          </a>
+        </div>
+      )}
 
-  // Venture management state
-  const [ventures, setVentures] = useState<Venture[]>([]);
-  const [killTarget, setKillTarget] = useState<Venture | null>(null);
-  const [killing, setKilling] = useState(false);
-  const [killError, setKillError] = useState<string | null>(null);
+      {/* Deploy error */}
+      {deployErr && (
+        <div style={{ marginTop: 8, fontSize: 11, color: C.red, fontFamily: 'monospace' }}>⚠ {deployErr}</div>
+      )}
 
-  const refreshVentures = useCallback(async () => {
-    try {
-      const res = await api.ventures();
-      setVentures(res.ventures);
-    } catch {
-      /* silent */
-    }
-  }, []);
-
-  const confirmKill = useCallback(async () => {
-    if (!killTarget) return;
-    setKilling(true);
-    setKillError(null);
-    try {
-      await api.killVenture(killTarget.venture_id);
-      setKillTarget(null);
-      await refreshVentures();
-    } catch (e) {
-      setKillError(e instanceof Error ? e.message : "Kill failed");
-    } finally {
-      setKilling(false);
-    }
-  }, [killTarget, refreshVentures]);
-
-  // Week 5 — pipeline control state
-  const [pipelineDept, setPipelineDept] = useState<"PRODUCT" | "MEDIA" | "AUTO">("AUTO");
-  const [launching, setLaunching] = useState(false);
-  const [launchError, setLaunchError] = useState<string | null>(null);
-  const [recentRuns, setRecentRuns] = useState<PipelineRun[]>([]);
-  const pollTimers = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
-
-  const refreshRecentRuns = useCallback(async () => {
-    try {
-      const res = await api.pipelineRecent();
-      setRecentRuns(res.runs);
-    } catch {
-      /* silent */
-    }
-  }, []);
-
-  const pollRun = useCallback(
-    (run_id: string) => {
-      if (pollTimers.current.has(run_id)) return;
-      const timer = setInterval(async () => {
-        try {
-          const run = await api.pipelineStatus(run_id);
-          setRecentRuns((prev) =>
-            prev.map((r) => (r.run_id === run_id ? run : r)),
-          );
-          if (run.status !== "STARTED" && run.status !== "RUNNING") {
-            clearInterval(pollTimers.current.get(run_id));
-            pollTimers.current.delete(run_id);
-          }
-        } catch {
-          clearInterval(pollTimers.current.get(run_id));
-          pollTimers.current.delete(run_id);
-        }
-      }, 3000);
-      pollTimers.current.set(run_id, timer);
-    },
-    [],
-  );
-
-  const launchPipeline = useCallback(async () => {
-    setLaunching(true);
-    setLaunchError(null);
-    try {
-      const result = await api.pipelineRun(pipelineDept);
-      const stub: PipelineRun = {
-        run_id: result.run_id,
-        venture_id: result.venture_id,
-        department: pipelineDept,
-        status: "STARTED",
-        current_stage: "RESEARCH_NODE",
-        started_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        completed_at: null,
-        event_count: 0,
-        recent_events: [],
-        last_error: null,
-      };
-      setRecentRuns((prev) => [stub, ...prev]);
-      pollRun(result.run_id);
-    } catch (e) {
-      setLaunchError(e instanceof Error ? e.message : "Launch failed");
-    } finally {
-      setLaunching(false);
-    }
-  }, [pipelineDept, pollRun]);
-
-  // Restart polling for any RUNNING runs after page refresh
-  useEffect(() => {
-    recentRuns.forEach((r) => {
-      if (r.status === "STARTED" || r.status === "RUNNING") {
-        pollRun(r.run_id);
-      }
-    });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Cleanup timers on unmount
-  useEffect(() => {
-    return () => pollTimers.current.forEach((t) => clearInterval(t));
-  }, []);
-
-  const refresh = useCallback(async () => {
-    try {
-      const [a, r, p, t, s, pl, conf, rev] = await Promise.all([
-        api.agents(),
-        api.revenue(),
-        api.portfolio(),
-        api.trends(),
-        api.security(),
-        api.revenuePlan(),
-        api.confidence(),
-        api.manualReview(),
-      ]);
-      setAgents(a.agents);
-      setDataSource(a.source);
-      setRevenue(r);
-      setSlots(p.slots);
-      setTrends(t.trends);
-      setCoveragePct(t.coverage_pct);
-      setAlerts(s.alerts);
-      setPlan(pl);
-      setConfidence(conf);
-      setReviews(rev.items);
-      setError(null);
-      setLastTick(new Date().toLocaleTimeString());
-    } catch (e) {
-      setError(
-        "API unreachable. Start: uvicorn apps.api.main:app --reload --port 8000",
-      );
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    refreshRecentRuns();
-    refreshVentures();
-    const id = setInterval(refresh, 30000); // 30s — server-side cache is 60s; no point polling faster
-    return () => clearInterval(id);
-  }, [refresh, refreshRecentRuns, refreshVentures]);
-
-  useEffect(() => {
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    // window.location.host includes port when non-standard (e.g. localhost:5173 in dev).
-    // In production (Railway HTTPS/443) it's just the hostname — no :PORT needed.
-    const ws = new WebSocket(`${proto}//${window.location.host}/api/ws/live`);
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === "tick" && msg.revenue) setRevenue(msg.revenue);
-        // Update active runs from WebSocket tick
-        if (msg.active_pipeline_runs) {
-          const active: PipelineRun[] = msg.active_pipeline_runs;
-          setRecentRuns((prev) =>
-            prev.map((r) => {
-              const live = active.find((a) => a.run_id === r.run_id);
-              return live ? { ...r, ...live } : r;
-            }),
-          );
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-    return () => ws.close();
-  }, []);
-
-  const mrr = revenue?.mrr_usd ?? 0;
-  const burn = revenue?.burn_usd ?? 0;
-  const net = revenue?.net_mrr_usd ?? 0;
-
-  const activeVentures = ventures.filter((v) => v.status !== "KILLED");
-  const statusOrder: Record<string, number> = { FAILED: 0, DEVELOPMENT: 1, QA: 2, IDEATION: 3, LIVE: 4, SCALING: 5 };
-  const sortedVentures = [...activeVentures].sort(
-    (a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9),
-  );
-
-  return (
-    <div className="app">
-      {killTarget && (
-        <ConfirmKillDialog
-          venture={killTarget}
-          onConfirm={confirmKill}
-          onCancel={() => { setKillTarget(null); setKillError(null); }}
-          loading={killing}
-          error={killError}
+      {/* Decision card when paused */}
+      {isPaused && (
+        <DecisionCard
+          run={run}
+          onProceed={onRefresh}
+          onKill={onRefresh}
         />
       )}
-      <header>
-        <div>
-          <h1>AI Squadron Command Center</h1>
-          <p>Autonomous venture & media orchestration</p>
-        </div>
-        <div className="live-dot mono">
-          LIVE · {lastTick || "—"} · {dataSource}
-        </div>
-      </header>
+    </div>
+  )
+}
 
-      {error && <div className="error-banner">{error}</div>}
+// ─── Compact run history row ──────────────────────────────────────────────────
+function HistoryRow({ run }: { run: PipelineRun }) {
+  const statusColor = {
+    COMPLETED: C.accent, FAILED: C.red, MANUAL_REVIEW: C.orange,
+    RUNNING: C.blue, STARTED: C.blue,
+  }[run.status] ?? C.fgMuted
 
-      <section className="ticker mono">
-        <div className="stat">
-          <div className="label">MRR</div>
-          <div className={`value ${mrr > 0 ? "positive" : ""}`}>{formatUsd(mrr)}</div>
-        </div>
-        <div className="stat">
-          <div className="label">ARR</div>
-          <div className="value">{formatUsd(revenue?.arr_usd ?? mrr * 12)}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Burn (API + infra)</div>
-          <div className="value negative">{formatUsd(burn)}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Net MRR</div>
-          <div className={`value ${net >= 0 ? "positive" : "negative"}`}>
-            {formatUsd(net)}
+  const idx = stageIdx(run.current_stage)
+  const pct = run.status === 'COMPLETED' ? 100 : Math.round(((idx + 1) / STAGES.length) * 100)
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12,
+      padding: '8px 12px', borderRadius: 6,
+      border: `1px solid ${C.border}`, background: C.panelAlt,
+      fontSize: 11,
+    }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor, flexShrink: 0, display: 'inline-block' }} />
+      <span style={{ fontFamily: 'monospace', color: C.fgMuted, flexShrink: 0 }}>{run.venture_id}</span>
+      <div style={{ flex: 1, background: C.border, borderRadius: 2, height: 3, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: statusColor, transition: 'width 0.4s' }} />
+      </div>
+      <span style={{ color: statusColor, fontWeight: 700, fontFamily: 'monospace', flexShrink: 0, width: 90 }}>
+        {run.current_stage.replace(/_NODE$/, '').replace(/_/g, ' ')}
+      </span>
+      <span style={{ color: C.fgDim, flexShrink: 0 }}>{elapsed(run.started_at)}</span>
+    </div>
+  )
+}
+
+// ─── Portfolio card ───────────────────────────────────────────────────────────
+function PortfolioCard({ slot }: { slot: PortfolioSlot & { live_url?: string; niche?: string } }) {
+  const isLive = slot.status === 'LIVE' || slot.live_url
+  const statusColor = isLive ? C.accent : slot.status === 'DEVELOPMENT' ? C.blue : C.fgDim
+
+  return (
+    <div style={{
+      padding: '12px 16px', borderRadius: 8,
+      border: `1px solid ${isLive ? 'rgba(62,207,142,0.3)' : C.border}`,
+      background: isLive ? 'rgba(62,207,142,0.04)' : C.panelAlt,
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: 'monospace', fontSize: 10, color: C.fgDim, marginBottom: 3 }}>
+            {slot.venture_id}
           </div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: C.fg, marginBottom: 4, lineHeight: 1.4 }}>
+            {slot.niche || 'Pending niche'}
+          </div>
+          {slot.live_url && (
+            <a href={slot.live_url} target="_blank" rel="noreferrer"
+              style={{ fontSize: 10, color: C.accent, textDecoration: 'none', wordBreak: 'break-all' }}>
+              {slot.live_url}
+            </a>
+          )}
         </div>
-      </section>
-
-      {confidence && (
-        <section className="confidence-panel mono">
-          <div className="conf-score">
-            <span className="label">Confidence</span>
-            <span className={`conf-value tier-${confidence.confidence_tier}`}>
-              {confidence.confidence_score}/100
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+          <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
+            background: `${statusColor}22`, color: statusColor, fontFamily: 'monospace' }}>
+            {slot.status}
+          </span>
+          {slot.mrr_usd > 0 && (
+            <span style={{ fontSize: 11, fontWeight: 700, color: C.accent }}>
+              {usd(slot.mrr_usd)}/mo
             </span>
-            <span className="conf-tier">{confidence.confidence_tier}</span>
-          </div>
-          <div className="conf-forecast">
-            <span>12mo MRR p10 {formatUsd(confidence.forecast_p10_mrr_12mo)}</span>
-            <span> p50 {formatUsd(confidence.forecast_p50_mrr_12mo)}</span>
-            <span> p90 {formatUsd(confidence.forecast_p90_mrr_12mo)}</span>
-          </div>
-          <div className="conf-indicators">
-            QA {confidence.leading_indicators?.qa_first_pass_rate_pct ?? 0}% · Revenue ventures{" "}
-            {confidence.leading_indicators?.ventures_with_revenue ?? 0} · Active dev{" "}
-            {confidence.leading_indicators?.live_venture_count ?? 0} · Runs{" "}
-            {confidence.leading_indicators?.completed_pipeline_runs ?? 0} · Reviews pending{" "}
-            {confidence.leading_indicators?.manual_review_pending ?? 0}
-          </div>
-        </section>
-      )}
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
-      {/* Week 5 — Pipeline Control Panel */}
-      <section className="panel" style={{ marginTop: "1rem" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2>Pipeline Control</h2>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <select
-              value={pipelineDept}
-              onChange={(e) => setPipelineDept(e.target.value as typeof pipelineDept)}
-              style={{
-                background: "#111",
-                color: "var(--fg)",
-                border: "1px solid var(--border)",
-                borderRadius: 4,
-                padding: "4px 8px",
-                fontSize: "0.8rem",
-              }}
-            >
-              <option value="AUTO">AUTO (CEO decides)</option>
-              <option value="PRODUCT">PRODUCT (SaaS)</option>
-              <option value="MEDIA">MEDIA (Content channel)</option>
-            </select>
-            <button
-              onClick={launchPipeline}
-              disabled={launching}
-              style={{
-                background: launching ? "#333" : "var(--accent)",
-                color: launching ? "var(--muted)" : "#000",
-                border: "none",
-                borderRadius: 4,
-                padding: "6px 16px",
-                fontSize: "0.82rem",
-                fontWeight: 700,
-                cursor: launching ? "not-allowed" : "pointer",
-                fontFamily: "monospace",
-              }}
-            >
-              {launching ? "Launching…" : "Launch New Venture"}
-            </button>
-            {/* Bulk cleanup — kills all stale/incomplete ventures */}
-            <button
-              onClick={async () => {
-                if (!confirm("Kill all IDEATION + stale DEVELOPMENT ventures? LIVE/deployed ones are kept.")) return;
-                try {
-                  await fetch("/api/ventures/cleanup", { method: "POST" });
-                  await refreshVentures();
-                  await refreshRecentRuns();
-                } catch { /* silent */ }
-              }}
-              style={{
-                background: "#1a0000", color: "#f66",
-                border: "1px solid #f44", borderRadius: 4,
-                padding: "6px 12px", fontSize: "0.78rem",
-                fontWeight: 700, cursor: "pointer", fontFamily: "monospace",
-              }}
-              title="Kill all incomplete/stale ventures"
-            >
-              🗑 Cleanup
-            </button>
+// ─── Agent health grid ────────────────────────────────────────────────────────
+function AgentHealthRow({ agent }: { agent: AgentRow }) {
+  const isRunning = agent.status === 'RUNNING'
+  const isFailed  = agent.status === 'FAILED'
+  const color = isRunning ? C.blue : isFailed ? C.red : agent.success_ratio > 0.8 ? C.accent : C.fgMuted
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: `1px solid ${C.border}` }}>
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block',
+        boxShadow: isRunning ? `0 0 6px ${color}` : 'none', animation: isRunning ? 'pulse 1.2s infinite' : 'none' }} />
+      <span style={{ flex: 1, fontSize: 11, color: C.fgMuted, fontFamily: 'monospace',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {agent.agent_name.replace(/_/g, ' ')}
+      </span>
+      <span style={{ fontSize: 10, color: C.fgDim, fontFamily: 'monospace', flexShrink: 0 }}>
+        {agent.status === 'RUNNING' ? '▶' : agent.success_ratio > 0 ? `${(agent.success_ratio * 100).toFixed(0)}%` : '●'}
+      </span>
+    </div>
+  )
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+export default function CommandCenter() {
+  const [revenue,    setRevenue]    = useState<RevenueSummary | null>(null)
+  const [confidence, setConfidence] = useState<ConfidenceReport | null>(null)
+  const [agents,     setAgents]     = useState<AgentRow[]>([])
+  const [slots,      setSlots]      = useState<(PortfolioSlot & { live_url?: string; niche?: string })[]>([])
+  const [ventures,   setVentures]   = useState<Venture[]>([])
+  const [runs,       setRuns]       = useState<PipelineRun[]>([])
+  const [launching,  setLaunching]  = useState(false)
+  const [launchErr,  setLaunchErr]  = useState('')
+  const [lastTick,   setLastTick]   = useState('')
+  const [apiErr,     setApiErr]     = useState('')
+
+  const pollTimers = useRef(new Map<string, ReturnType<typeof setInterval>>())
+
+  // ── Polling individual run ────────────────────────────────────────────────
+  const pollRun = useCallback((run_id: string) => {
+    if (pollTimers.current.has(run_id)) return
+    const timer = setInterval(async () => {
+      try {
+        const run = await api.pipelineStatus(run_id)
+        setRuns(prev => prev.map(r => r.run_id === run_id ? run : r))
+        if (!['STARTED', 'RUNNING'].includes(run.status)) {
+          clearInterval(pollTimers.current.get(run_id))
+          pollTimers.current.delete(run_id)
+        }
+      } catch {
+        clearInterval(pollTimers.current.get(run_id))
+        pollTimers.current.delete(run_id)
+      }
+    }, 3000)
+    pollTimers.current.set(run_id, timer)
+  }, [])
+
+  // ── Data refresh ──────────────────────────────────────────────────────────
+  const refresh = useCallback(async () => {
+    try {
+      const [a, r, conf, venRes, runsRes] = await Promise.all([
+        api.agents().catch(() => ({ agents: [], source: 'offline' })),
+        api.revenue().catch(() => null),
+        api.confidence().catch(() => null),
+        api.ventures().catch(() => ({ ventures: [], count: 0 })),
+        api.pipelineRecent().catch(() => ({ runs: [], count: 0 })),
+      ])
+      setAgents(a.agents)
+      if (r) setRevenue(r)
+      if (conf) setConfidence(conf)
+      setVentures(venRes.ventures)
+      setRuns((prev: PipelineRun[]) => {
+        const serverById = new Map<string, PipelineRun>(
+          runsRes.runs.map((r: PipelineRun) => [r.run_id, r] as [string, PipelineRun])
+        )
+        const merged: PipelineRun[] = prev.map(r => serverById.get(r.run_id) ?? r)
+        runsRes.runs.forEach((r: PipelineRun) => {
+          if (!merged.find(m => m.run_id === r.run_id)) merged.unshift(r)
+        })
+        return merged.slice(0, 50)
+      })
+
+      // Build portfolio from ventures
+      const portfolioSlots = venRes.ventures
+        .filter(v => v.status !== 'KILLED')
+        .map((v, i) => ({
+          slot: i + 1, venture_id: v.venture_id,
+          status: v.status, niche: v.niche, mrr_usd: 0,
+          live_url: (v as Venture & { live_url?: string }).live_url,
+        }))
+      setSlots(portfolioSlots)
+
+      setApiErr('')
+      setLastTick(new Date().toLocaleTimeString())
+    } catch {
+      setApiErr('API unreachable — check Railway service is running')
+    }
+  }, [])
+
+  useEffect(() => {
+    refresh()
+    const id = setInterval(refresh, 30_000)
+    return () => clearInterval(id)
+  }, [refresh])
+
+  // Auto-poll active runs
+  useEffect(() => {
+    runs.forEach(r => { if (r.status === 'STARTED' || r.status === 'RUNNING') pollRun(r.run_id) })
+  }, [runs, pollRun])
+
+  // WebSocket live tick
+  useEffect(() => {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${proto}//${location.host}/api/ws/live`)
+    ws.onmessage = ev => {
+      try {
+        const msg = JSON.parse(ev.data)
+        if (msg.type === 'tick' && msg.revenue) setRevenue(msg.revenue)
+      } catch { /* ignore */ }
+    }
+    return () => ws.close()
+  }, [])
+
+  useEffect(() => () => pollTimers.current.forEach(t => clearInterval(t)), [])
+
+  // ── Actions ───────────────────────────────────────────────────────────────
+  async function launchPipeline() {
+    setLaunching(true); setLaunchErr('')
+    try {
+      const result = await api.pipelineRun()
+      const stub: PipelineRun = {
+        run_id: result.run_id, venture_id: result.venture_id,
+        department: 'PRODUCT', status: 'STARTED',
+        current_stage: 'RESEARCH_NODE',
+        started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        completed_at: null, event_count: 0, recent_events: [], last_error: null,
+      }
+      setRuns(prev => [stub, ...prev])
+      pollRun(result.run_id)
+    } catch (e) {
+      setLaunchErr(e instanceof Error ? e.message : 'Launch failed')
+    } finally { setLaunching(false) }
+  }
+
+  // ── Derived ───────────────────────────────────────────────────────────────
+  const mrr  = revenue?.mrr_usd ?? 0
+  const burn = revenue?.burn_usd ?? 0
+  const net  = revenue?.net_mrr_usd ?? 0
+  const conf = confidence?.confidence_score ?? 0
+
+  const killedIds = new Set(ventures.filter(v => v.status === 'KILLED').map(v => v.venture_id))
+  const visibleRuns = runs.filter(r => !killedIds.has(r.venture_id))
+  const activeRuns  = visibleRuns.filter(r => ['STARTED', 'RUNNING', 'MANUAL_REVIEW'].includes(r.status))
+  const historyRuns = visibleRuns.filter(r => ['COMPLETED', 'FAILED'].includes(r.status)).slice(0, 8)
+  const liveVentures = slots.filter(s => s.status === 'LIVE' || s.live_url)
+
+  return (
+    <div style={{ background: C.bg, minHeight: '100vh', color: C.fg }}>
+      <style>{`
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+        * { box-sizing: border-box; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #2e2e4a; border-radius: 4px; }
+      `}</style>
+
+      {/* ── Top bar ──────────────────────────────────────────────────────────── */}
+      <div style={{
+        position: 'sticky', top: 0, zIndex: 100,
+        background: `${C.bg}ee`, backdropFilter: 'blur(12px)',
+        borderBottom: `1px solid ${C.border}`,
+        padding: '0 24px', height: 56,
+        display: 'flex', alignItems: 'center', gap: 24,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <span style={{ fontSize: 18 }}>⚡</span>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 13, letterSpacing: '-0.5px' }}>AI Squadron</div>
+            <div style={{ fontSize: 9, color: C.fgDim, fontFamily: 'monospace' }}>COMMAND CENTER</div>
           </div>
         </div>
 
-        {launchError && (
-          <div style={{ color: "#f66", fontSize: "0.78rem", marginTop: 6 }}>
-            ⚠ {launchError}
+        {/* Metrics strip */}
+        <div style={{ display: 'flex', gap: 0, flex: 1 }}>
+          {[
+            { label: 'MRR', value: usd(mrr), color: mrr > 0 ? C.accent : C.fgMuted },
+            { label: 'Burn', value: usd(burn), color: C.red },
+            { label: 'Net', value: usd(net), color: net >= 0 ? C.accent : C.red },
+            { label: 'Confidence', value: `${conf}/100`, color: conf >= 50 ? C.accent : conf >= 25 ? C.orange : C.fgMuted },
+          ].map(m => (
+            <div key={m.label} style={{ padding: '0 16px', borderRight: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 9, color: C.fgDim, fontFamily: 'monospace', marginBottom: 1 }}>{m.label}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: m.color, fontFamily: 'monospace' }}>{m.value}</div>
+            </div>
+          ))}
+          <div style={{ padding: '0 16px', borderRight: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 9, color: C.fgDim, fontFamily: 'monospace', marginBottom: 1 }}>LIVE</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, fontFamily: 'monospace' }}>{liveVentures.length}</div>
           </div>
-        )}
-
-        {(() => {
-          const killedIds = new Set(ventures.filter((v) => v.status === "KILLED").map((v) => v.venture_id));
-          const visibleRuns = recentRuns.filter((r) => !killedIds.has(r.venture_id));
-          return visibleRuns.length === 0 ? (
-            <p style={{ color: "var(--muted)", fontSize: "0.82rem", marginTop: 8 }}>
-              No pipeline runs yet. Click "Launch New Venture" to start.
-            </p>
-          ) : (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginBottom: 6 }}>
-                {visibleRuns.length} run{visibleRuns.length !== 1 ? "s" : ""} total —{" "}
-                {visibleRuns.filter((r) => r.status === "RUNNING" || r.status === "STARTED").length} active
-              </div>
-              {visibleRuns.map((run) => (
-                <ActiveRunCard
-                  key={run.run_id}
-                  run={run}
-                  onRefresh={refreshRecentRuns}
-                  onKill={(v) => { setKillTarget(v as Venture); setKillError(null); }}
-                />
-              ))}
+          <div style={{ padding: '0 16px' }}>
+            <div style={{ fontSize: 9, color: C.fgDim, fontFamily: 'monospace', marginBottom: 1 }}>ACTIVE</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: activeRuns.length > 0 ? C.blue : C.fgMuted, fontFamily: 'monospace' }}>
+              {activeRuns.length}
             </div>
-          );
-        })()}
-      </section>
+          </div>
+        </div>
 
-      <div className="grid grid-top">
-        <section className="panel">
-          <h2>Agent health & performance</h2>
-          <table className="agent-table">
-            <thead>
-              <tr>
-                <th>Agent</th>
-                <th>Status</th>
-                <th>Task</th>
-                <th>Tokens</th>
-                <th>Success</th>
-              </tr>
-            </thead>
-            <tbody>
-              {agents.map((a) => (
-                <tr key={a.agent_name}>
-                  <td className="mono">{a.agent_name.replace(/_/g, " ")}</td>
-                  <td>
-                    <span className={`badge ${a.status}`}>{a.status}</span>
-                  </td>
-                  <td>{a.current_task}</td>
-                  <td className="mono">{a.tokens_used.toLocaleString()}</td>
-                  <td className="mono">{(a.success_ratio * 100).toFixed(0)}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-
-        <section className="panel">
-          <h2>Global trends vs portfolio ({coveragePct}% covered)</h2>
-          {trends.map((t) => (
-            <div key={t.topic} className="trend-row">
-              <span style={{ width: 140 }}>{t.topic}</span>
-              <div className="trend-bar">
-                <div
-                  className="trend-bar-inner"
-                  style={{ width: `${t.score}%`, opacity: t.covered ? 1 : 0.45 }}
-                />
-              </div>
-              <span className="mono" style={{ width: 36 }}>
-                {t.score}
-              </span>
-              <span style={{ color: t.covered ? "var(--accent)" : "var(--muted)", width: 56 }}>
-                {t.covered ? "covered" : "gap"}
-              </span>
-              <span className="mono" style={{ color: "var(--muted)" }}>
-                {t.region}
-              </span>
-            </div>
-          ))}
-        </section>
-
-        <section className="panel">
-          <h2>Revenue orchestrator plan</h2>
-          {plan && (
-            <>
-              <p style={{ fontSize: "0.85rem", marginBottom: "0.75rem" }}>{plan.headline}</p>
-              <ul className="plan-list">
-                {plan.actions.map((a) => (
-                  <li key={a}>{a}</li>
-                ))}
-              </ul>
-            </>
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          {lastTick && (
+            <span style={{ fontSize: 10, color: C.fgDim, fontFamily: 'monospace' }}>
+              {lastTick}
+            </span>
           )}
-          {reviews.length > 0 && (
-            <>
-              <h2 style={{ marginTop: "1rem" }}>Manual review queue</h2>
-              <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: "0.5rem" }}>
-                Fix the root cause, then launch a new venture. Use Dismiss to clear stale items.
-              </p>
-              {reviews.map((r) => (
-                <div
-                  key={r.id ?? r.venture_id + (r.created_at ?? "")}
-                  style={{
-                    border: "1px solid #f84",
-                    borderRadius: 6,
-                    padding: "0.6rem 0.75rem",
-                    marginBottom: "0.5rem",
-                    background: "#1a1200",
-                  }}
-                >
-                  <div style={{ fontSize: "0.78rem", fontFamily: "monospace", color: "#f84" }}>
-                    {r.artifact_type ?? "BUILD"} · {r.venture_id}
-                  </div>
-                  <div style={{ fontSize: "0.75rem", marginTop: 3, color: "#ddd" }}>
-                    {r.review_reason}
-                  </div>
-                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                    {(["APPROVED", "REJECTED", "DEFERRED"] as const).map((action) => (
-                      <button
-                        key={action}
-                        style={{
-                          fontSize: "0.68rem",
-                          padding: "2px 8px",
-                          borderRadius: 4,
-                          border: "1px solid #444",
-                          background: action === "APPROVED" ? "#1a3a1a" : action === "REJECTED" ? "#3a1a1a" : "#222",
-                          color: action === "APPROVED" ? "#4c4" : action === "REJECTED" ? "#f44" : "#aaa",
-                          cursor: "pointer",
-                          fontFamily: "monospace",
-                        }}
-                        onClick={() => {
-                          if (!r.id) return;
-                          api.resolveReview(r.id, action)
-                            .then(() => refresh())
-                            .catch((e) => console.error("resolve failed", e));
-                        }}
-                      >
-                        {action === "APPROVED" ? "✓ Approve" : action === "REJECTED" ? "✗ Reject" : "— Dismiss"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </>
-          )}
-          <h2 style={{ marginTop: "1rem" }}>Risk & security</h2>
-          {alerts.map((al, i) => (
-            <div key={i} className="alert">
-              <strong>{al.platform}</strong> — {al.message}
-            </div>
-          ))}
-        </section>
+          <button
+            onClick={launchPipeline}
+            disabled={launching}
+            style={{
+              padding: '7px 18px', borderRadius: 8, border: 'none',
+              background: launching ? C.panelAlt : `linear-gradient(135deg,${C.purple},#6d28d9)`,
+              color: launching ? C.fgMuted : '#fff',
+              fontWeight: 700, fontSize: 12, cursor: launching ? 'not-allowed' : 'pointer',
+              boxShadow: launching ? 'none' : `0 0 16px ${C.purpleGlow}`,
+              transition: 'all 0.2s',
+            }}
+          >
+            {launching ? '⏳ Launching…' : '+ Launch Pipeline'}
+          </button>
+          <button
+            onClick={async () => {
+              if (!confirm('Kill all IDEATION + stale DEVELOPMENT ventures? Deployed ones are kept.')) return
+              await fetch('/api/ventures/cleanup', { method: 'POST' })
+              refresh()
+            }}
+            style={{
+              padding: '7px 12px', borderRadius: 8,
+              border: `1px solid rgba(239,68,68,0.3)`,
+              background: 'rgba(239,68,68,0.06)', color: C.red,
+              fontSize: 11, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            🗑 Cleanup
+          </button>
+        </div>
       </div>
 
-      <section className="panel" style={{ marginTop: "1rem" }}>
-        <h2>Portfolio progress (450 slots)</h2>
-        <div className="portfolio-grid">
-          {slots.map((s) => (
-            <div
-              key={s.slot}
-              className={`portfolio-cell ${s.status}`}
-              title={s.niche || s.status}
-            />
-          ))}
+      {/* ── Error banner ─────────────────────────────────────────────────────── */}
+      {apiErr && (
+        <div style={{
+          background: 'rgba(239,68,68,0.1)', borderBottom: `1px solid rgba(239,68,68,0.3)`,
+          padding: '10px 24px', fontSize: 12, color: C.red, fontFamily: 'monospace',
+        }}>
+          ⚠ {apiErr}
         </div>
-        <div className="legend">
-          <span className="IDEATION">Ideation</span>
-          <span className="DEVELOPMENT">Development</span>
-          <span className="LIVE">Live</span>
+      )}
+      {launchErr && (
+        <div style={{
+          background: 'rgba(239,68,68,0.1)', borderBottom: `1px solid rgba(239,68,68,0.3)`,
+          padding: '10px 24px', fontSize: 12, color: C.red,
+        }}>
+          Launch failed: {launchErr}
         </div>
-      </section>
+      )}
 
+      <div style={{ maxWidth: 1400, margin: '0 auto', padding: '24px 24px 48px' }}>
+
+        {/* ── Active pipelines (hero) ─────────────────────────────────────────── */}
+        <section style={{ marginBottom: 32 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, letterSpacing: '-0.3px' }}>
+              Active Pipelines
+              {activeRuns.length > 0 && (
+                <span style={{ marginLeft: 8, fontSize: 11, background: `${C.blue}22`, color: C.blue,
+                  padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>
+                  {activeRuns.length} running
+                </span>
+              )}
+            </h2>
+            <span style={{ fontSize: 11, color: C.fgDim }}>
+              Research → CEO → Engineering → QA → Security → Legal → Deploy
+            </span>
+          </div>
+
+          {activeRuns.length === 0 ? (
+            <div style={{
+              background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12,
+              padding: '40px 24px', textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>🚀</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: C.fg, marginBottom: 6 }}>No active pipelines</div>
+              <div style={{ fontSize: 12, color: C.fgMuted, marginBottom: 20 }}>
+                Launch a pipeline to autonomously research a niche, build a SaaS product, and deploy it to Railway.
+              </div>
+              <button
+                onClick={launchPipeline}
+                disabled={launching}
+                style={{
+                  padding: '10px 28px', borderRadius: 8, border: 'none',
+                  background: `linear-gradient(135deg,${C.purple},#6d28d9)`,
+                  color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                  boxShadow: `0 0 20px ${C.purpleGlow}`,
+                }}
+              >
+                {launching ? '⏳ Launching…' : '+ Launch First Pipeline'}
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {activeRuns.map(run => (
+                <ActivePipelineCard
+                  key={run.run_id}
+                  run={run}
+                  onRefresh={refresh}
+                  onKill={() => api.killVenture(run.venture_id).then(refresh).catch(() => {})}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* ── Recent history ─────────────────────────────────────────────────── */}
+        {historyRuns.length > 0 && (
+          <section style={{ marginBottom: 32 }}>
+            <h2 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 700, color: C.fgMuted }}>
+              Recent Runs
+            </h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {historyRuns.map(run => <HistoryRow key={run.run_id} run={run} />)}
+            </div>
+          </section>
+        )}
+
+        {/* ── Bottom grid: Portfolio + Agents ──────────────────────────────── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20 }}>
+
+          {/* Portfolio */}
+          <section>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <h2 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>
+                Portfolio
+                <span style={{ marginLeft: 8, fontSize: 11, color: C.fgMuted, fontWeight: 400 }}>
+                  {slots.length} venture{slots.length !== 1 ? 's' : ''}
+                  {liveVentures.length > 0 && ` · ${liveVentures.length} live`}
+                </span>
+              </h2>
+            </div>
+            {slots.length === 0 ? (
+              <div style={{
+                background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10,
+                padding: '32px 24px', textAlign: 'center',
+                color: C.fgMuted, fontSize: 12,
+              }}>
+                No ventures yet — launch a pipeline to generate your first SaaS product.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10 }}>
+                {slots.map(s => <PortfolioCard key={s.venture_id} slot={s} />)}
+              </div>
+            )}
+          </section>
+
+          {/* Agent health */}
+          <section>
+            <h2 style={{ margin: '0 0 14px', fontSize: 14, fontWeight: 700 }}>
+              Agent Health
+            </h2>
+            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 16px' }}>
+              {agents.length === 0 ? (
+                <div style={{ fontSize: 11, color: C.fgDim, textAlign: 'center', padding: '20px 0' }}>
+                  No agent data yet
+                </div>
+              ) : (
+                agents.map(a => <AgentHealthRow key={a.agent_name} agent={a} />)
+              )}
+            </div>
+
+            {/* Confidence panel */}
+            {confidence && (
+              <div style={{
+                marginTop: 12, background: C.panel,
+                border: `1px solid ${C.border}`, borderRadius: 10, padding: '14px 16px',
+              }}>
+                <div style={{ fontSize: 11, color: C.fgMuted, marginBottom: 8, fontWeight: 600 }}>CONFIDENCE SCORE</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10 }}>
+                  <span style={{
+                    fontSize: 32, fontWeight: 900,
+                    color: conf >= 60 ? C.accent : conf >= 30 ? C.orange : C.red,
+                  }}>{conf}</span>
+                  <span style={{ fontSize: 12, color: C.fgMuted }}>/100 · {confidence.confidence_tier}</span>
+                </div>
+                <div style={{ background: C.border, borderRadius: 4, height: 6, overflow: 'hidden', marginBottom: 12 }}>
+                  <div style={{
+                    width: `${conf}%`, height: '100%',
+                    background: conf >= 60 ? C.accent : conf >= 30 ? C.orange : C.red,
+                    transition: 'width 0.6s ease',
+                  }} />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {[
+                    ['12mo p50 MRR', usd(confidence.forecast_p50_mrr_12mo)],
+                    ['QA pass rate', `${confidence.leading_indicators?.qa_first_pass_rate_pct ?? 0}%`],
+                    ['Completed runs', String(confidence.leading_indicators?.completed_pipeline_runs ?? 0)],
+                  ].map(([label, value]) => (
+                    <div key={label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                      <span style={{ color: C.fgDim }}>{label}</span>
+                      <span style={{ color: C.fg, fontFamily: 'monospace', fontWeight: 600 }}>{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
     </div>
-  );
+  )
 }
