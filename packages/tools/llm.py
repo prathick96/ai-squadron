@@ -246,6 +246,18 @@ class LLMResponse:
 # ---------------------------------------------------------------------------
 # Error classification helpers
 # ---------------------------------------------------------------------------
+def _is_spending_cap(exc: Exception) -> bool:
+    """
+    Detect a Google billing spending-cap error.
+    When the monthly project cap is hit, ALL Gemini models fail with 429 +
+    'spending cap' in the message.  No point retrying or falling back to
+    another Gemini model — the whole project is blocked until the cap is raised.
+    The caller should raise immediately rather than sleeping 61 s.
+    """
+    s = str(exc).lower()
+    return "spending cap" in s or "monthly spending" in s or "spend cap" in s
+
+
 def _is_rate_limit(exc: Exception) -> bool:
     """
     Detect errors that should trigger a fallback to a lower/stable model.
@@ -255,6 +267,9 @@ def _is_rate_limit(exc: Exception) -> bool:
       - 429 / quota exhausted     → rate limited
       - 403 / permission denied   → no access to this model tier
       - 404 / not found           → model deprecated or not yet available in your region
+
+    NOTE: spending-cap 429s are NOT rate-limits — they block all Gemini models.
+    _is_spending_cap() is checked first in _call_gemini to fail fast.
     """
     def _check(e: BaseException) -> bool:
         s = str(e).lower()
@@ -262,7 +277,7 @@ def _is_rate_limit(exc: Exception) -> bool:
             "429", "quota", "rate_limit", "resource_exhausted",
             "too many requests", "rate exceeded",
             "403", "permission_denied", "denied access",
-            "404", "not found", "model not found",  # model unavailable → fallback to 1.5-flash
+            "404", "not found", "model not found",
         ))
 
     if _check(exc):
@@ -355,26 +370,43 @@ async def _call_gemini(
 ) -> LLMResponse:
     """
     Call hierarchy on rate limits:
-      gemini-2.5-pro  → (429) → gemini-2.0-flash → (429) → wait 61s → retry 2.0-flash
+      gemini-2.5-pro  → (429 RPM) → gemini-2.0-flash → (429 RPM) → wait 61s → retry
+
+    Spending-cap 429: all Gemini models are blocked project-wide — fail immediately
+    with a clear message instead of waiting 61 s per attempt.
+    Fix: https://aistudio.google.com/app/billing → raise monthly spending cap.
     """
     try:
         return await _gemini_raw(model_name, system_prompt, user_prompt,
                                   temperature, response_schema)
     except Exception as exc:
+        # Spending cap blocks ALL Gemini models — no point trying fallbacks
+        if _is_spending_cap(exc):
+            raise RuntimeError(
+                "Google AI Studio monthly spending cap reached. "
+                "Go to https://aistudio.google.com/app/billing and raise your cap. "
+                f"Original error: {exc}"
+            ) from exc
+
         if not _is_rate_limit(exc):
             raise
 
-        # Step 1: If Pro was rate-limited, try Flash immediately
+        # Step 1: If Pro/Flash-primary was rate-limited, try 2.0-flash immediately
         if model_name != _FLASH:
             log.warning("Gemini %s rate-limited — trying %s", model_name, _FLASH)
             try:
                 return await _gemini_raw(_FLASH, system_prompt, user_prompt,
                                           temperature, response_schema)
             except Exception as flash_exc:
+                if _is_spending_cap(flash_exc):
+                    raise RuntimeError(
+                        "Google AI Studio monthly spending cap reached. "
+                        "Go to https://aistudio.google.com/app/billing and raise your cap."
+                    ) from flash_exc
                 if not _is_rate_limit(flash_exc):
                     raise
 
-        # Step 2: Flash also rate-limited — wait out the 60s RPM window
+        # Step 2: Flash also rate-limited (RPM) — wait out the 60 s window
         wait_sec = 61
         log.warning(
             "Gemini %s also rate-limited (15 RPM exceeded). "
