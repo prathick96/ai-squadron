@@ -327,6 +327,36 @@ export default function SetupRequired() {
 """,
 
     # ------------------------------------------------------------------
+    # src/components/LegalFooter.tsx — platform legal links on every app.
+    # Satisfies Razorpay's refund policy visibility requirement at the app level.
+    # ------------------------------------------------------------------
+    "src/components/LegalFooter.tsx": """\
+export default function LegalFooter() {
+  return (
+    <footer style={{
+      marginTop: 'auto',
+      borderTop: '1px solid #e2e8f0',
+      padding: '16px 24px',
+      textAlign: 'center',
+      fontSize: 12,
+      color: '#94a3b8',
+      background: '#f8fafc',
+    }}>
+      <span>Powered by AI Squadron · </span>
+      <a href="https://ai-squadron.app/legal/terms" target="_blank" rel="noreferrer"
+         style={{ color: '#7c3aed', textDecoration: 'none' }}>Terms</a>
+      {' · '}
+      <a href="https://ai-squadron.app/legal/privacy" target="_blank" rel="noreferrer"
+         style={{ color: '#7c3aed', textDecoration: 'none' }}>Privacy</a>
+      {' · '}
+      <a href="https://ai-squadron.app/legal/refund" target="_blank" rel="noreferrer"
+         style={{ color: '#7c3aed', textDecoration: 'none' }}>Refund Policy</a>
+    </footer>
+  )
+}
+""",
+
+    # ------------------------------------------------------------------
     # src/App.tsx — routing shell.  Moved from LLM → scaffold because LLM
     # was the #1 source of TypeScript errors and React mount failures.
     # Shows SetupRequired until VITE_SUPABASE_* are configured.
@@ -335,6 +365,7 @@ export default function SetupRequired() {
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
 import { isSupabaseConfigured } from './lib/supabase'
 import SetupRequired from './components/SetupRequired'
+import LegalFooter from './components/LegalFooter'
 import Home from './pages/Home'
 
 export default function App() {
@@ -344,24 +375,27 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <nav style={{
-        padding: '0 24px',
-        height: 52,
-        borderBottom: '1px solid #e2e8f0',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 24,
-        background: '#fff',
-      }}>
-        <Link to="/" style={{ fontWeight: 700, textDecoration: 'none', color: '#0f172a', fontSize: 16 }}>
-          App
-        </Link>
-      </nav>
-      <main style={{ padding: '32px 24px', maxWidth: 1100, margin: '0 auto' }}>
-        <Routes>
-          <Route path="/" element={<Home />} />
-        </Routes>
-      </main>
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+        <nav style={{
+          padding: '0 24px',
+          height: 52,
+          borderBottom: '1px solid #e2e8f0',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 24,
+          background: '#fff',
+        }}>
+          <Link to="/" style={{ fontWeight: 700, textDecoration: 'none', color: '#0f172a', fontSize: 16 }}>
+            App
+          </Link>
+        </nav>
+        <main style={{ padding: '32px 24px', maxWidth: 1100, margin: '0 auto', flex: 1, width: '100%' }}>
+          <Routes>
+            <Route path="/" element={<Home />} />
+          </Routes>
+        </main>
+        <LegalFooter />
+      </div>
     </BrowserRouter>
   )
 }
@@ -380,9 +414,10 @@ ALREADY PROVIDED BY SCAFFOLD (do NOT regenerate):
   package.json, vite.config.ts, tsconfig.json, index.html
   src/vite-env.d.ts
   src/main.tsx         — React root, QueryClient, PostHog
-  src/App.tsx          — BrowserRouter, routes, nav, SetupRequired gate
+  src/App.tsx          — BrowserRouter, routes, nav, LegalFooter, SetupRequired gate
   src/lib/supabase.ts  — exports: supabase (SupabaseClient | null), isSupabaseConfigured
   src/components/SetupRequired.tsx  — shown when Supabase env vars missing
+  src/components/LegalFooter.tsx    — platform Terms/Privacy/Refund links (every app)
 
 GENERATE ONLY THESE 3 FILES (max 80 lines each):
 
