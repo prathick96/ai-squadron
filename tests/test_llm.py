@@ -170,7 +170,7 @@ async def test_unknown_role_falls_back_to_haiku(monkeypatch):
     with patch("packages.tools.llm._call_anthropic", new_callable=AsyncMock) as mock_claude:
         mock_claude.return_value = response_mock
 
-        resp = await call_llm("UNKNOWN_AGENT_ROLE_XYZ", "System prompt", "User prompt")
+        await call_llm("UNKNOWN_AGENT_ROLE_XYZ", "System prompt", "User prompt")
 
         assert mock_claude.call_args[0][0] == "claude-haiku-4-5-20251001"
 
