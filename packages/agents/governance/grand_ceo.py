@@ -258,9 +258,19 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
         log.info("[CEO_NODE] MEDIA_CHANNEL overridden to MICRO_SAAS (product focus phase)")
 
     # ── Validate go_decision against GO_THRESHOLD ────────────────────────────
+    # Calculate total from the 4 rubric dimensions (each 0-25, total 0-100).
+    # Do NOT use confidence_score — Gemini Flash leaves it at 0 (unset default)
+    # while filling tam_score/competition_gap/build_score/revenue_velocity correctly.
     shortlist  = brief_data.get("niche_shortlist", [])
     top_niche  = shortlist[0] if shortlist else {}
-    total_score = top_niche.get("confidence_score", 0)
+    dim_total = (
+        int(top_niche.get("tam_score",       0) or 0)
+        + int(top_niche.get("competition_gap",  0) or 0)
+        + int(top_niche.get("build_score",      0) or 0)
+        + int(top_niche.get("revenue_velocity", 0) or 0)
+    )
+    # Fallback to confidence_score only when dimension scores are all zero/absent
+    total_score = dim_total if dim_total > 0 else int(top_niche.get("confidence_score", 0) or 0)
     if total_score < 70 and brief_data.get("go_decision") is True:
         brief_data["go_decision"] = False
         brief_data["go_rationale"] = (
