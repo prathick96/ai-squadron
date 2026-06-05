@@ -74,9 +74,11 @@ async def script_agent_node(state: AgentState) -> AgentState:
 
     platform = strategy.get("primary_platform", "youtube")
     pillars = strategy.get("content_pillars", [{}])
-    pillar = pillars[0].get("pillar", "AI productivity") if pillars else "AI productivity"
-    keywords = pillars[0].get("target_keywords", ["AI tools"]) if pillars else ["AI tools"]
-    keyword = keywords[0] if keywords else "AI tools"
+    pillar = pillars[0].get("pillar", "") if pillars else ""
+    if not pillar:
+        log.warning("[SCRIPT_NODE] content_pillar not in channel_strategy — script topic will be inferred from strategy")
+    keywords = pillars[0].get("target_keywords", []) if pillars else []
+    keyword = keywords[0] if keywords else ""
 
     task = "Regenerating script from QA critique" if is_retry else "Writing script"
     log.info("[SCRIPT_NODE] %s | venture=%s platform=%s", task, venture_id, platform)

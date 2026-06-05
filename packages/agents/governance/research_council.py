@@ -1,27 +1,30 @@
 """
 packages/agents/governance/research_council.py
-Global Research Council — 5 parallel Kimi scouts + structured debate.
+Global Research Council — 5 parallel Gemini 2.5 Pro scouts + structured debate.
 
-Model:   Kimi K2.x via OpenRouter / DeepInfra / Moonshot (1M context)
-Input:   Trend snapshot (pytrends + Tavily)
+Model:   Gemini 2.5 Pro (1M context, best reasoning for deep niche research)
+         Falls back to gemini-1.5-flash if 2.5-pro is quota-limited.
+Input:   Live trend snapshot (pytrends + Tavily) — NO mock data, NO hardcoded niches
 Output:  ResearchDossier handed to Grand CEO
 
 The council NEVER sets go_decision — that is the CEO's sole authority.
 Each scout has a different lens; the Debate Synthesiser surfaces disagreements.
 
-Scouts:
+Scouts (run in parallel, Gemini 2.5 Pro):
   1. Trend Hunter     — rising search volume, viral signals, platform trends
   2. Competitor Analyst — reverse-engineers top performers, finds moat gaps
   3. Skeptic          — challenges every pitch: risk, saturation, policy, CAC
   4. Audience Analyst — target persona, pain severity, willingness to pay
   5. Execution Scout  — build feasibility for our specific agent stack
+
+No mock fallback. Requires GEMINI_API_KEY. If the API call fails, the error
+propagates — pipelines run on real data or not at all.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import os
 from typing import Any
 
 from packages.db.client import log_agent_event
@@ -30,7 +33,7 @@ from packages.schemas.events import (
     AgentID, EventType, ResearchDossierPayload, make_event,
 )
 from packages.state.agent_state import AgentState, ResearchDossier, append_event, update_stage
-from packages.tools.llm import call_llm, kimi_available
+from packages.tools.llm import call_llm
 from packages.tools.trends import fetch_trend_snapshot
 
 log = logging.getLogger(__name__)
@@ -157,34 +160,13 @@ async def research_council_node(state: AgentState) -> AgentState:
     trend_snapshot = await fetch_trend_snapshot()
     trend_json = json.dumps(trend_snapshot, indent=2)
 
-    # KIMI_LIVE=true enables live OpenRouter/Kimi calls for real niche research.
-    # Default is mock — saves API credits during development and testing.
-    # The mock dossier uses real pytrends data but skips the 5-scout LLM debate.
-    _kimi_live = os.getenv("KIMI_LIVE", "false").lower() == "true"
-
-    if _kimi_live and kimi_available():
-        try:
-            dossier_body, debate_transcript, token_total, latency_total = (
-                await _run_live_council(trend_json)
-            )
-            mode = "kimi_live"
-        except Exception as exc:
-            log.warning(
-                "[RESEARCH_NODE] Kimi live council failed (%s) — falling back to mock dossier",
-                exc,
-            )
-            dossier_body, debate_transcript = _mock_council_dossier(trend_snapshot)
-            token_total, latency_total = 0, 0
-            mode = "mock"
-    else:
-        if _kimi_live and not kimi_available():
-            log.warning("[RESEARCH_NODE] KIMI_LIVE=true but no Kimi key set — using mock")
-        else:
-            log.info("[RESEARCH_NODE] KIMI_LIVE not set — using mock dossier (set KIMI_LIVE=true for live research)")
-        log.warning("[RESEARCH_NODE] No Kimi key — using mock council dossier")
-        dossier_body, debate_transcript = _mock_council_dossier(trend_snapshot)
-        token_total, latency_total = 0, 0
-        mode = "mock"
+    # Always run live with Gemini 2.5 Pro. No mock fallback.
+    # Requires GEMINI_API_KEY in environment. If missing → exception propagates.
+    log.info("[RESEARCH_NODE] Running live council with Gemini 2.5 Pro")
+    dossier_body, debate_transcript, token_total, latency_total = (
+        await _run_live_council(trend_json)
+    )
+    mode = "gemini_live"
 
     payload = ResearchDossierPayload(
         venture_id=venture_id,
@@ -314,90 +296,29 @@ async def _run_single_scout(
 
 
 def _fallback_scout(role_name: str, reason: str) -> dict[str, Any]:
+    """Minimal fallback used when a single scout's JSON parse fails. No hardcoded niches."""
+    log.error("[RESEARCH_NODE] Scout %s failed with: %s — returning empty report", role_name, reason)
     return {
         "scout_role": role_name,
         "niche_candidates": [],
-        "top_pick": "AI finance micro-tools for freelancers",
-        "rationale": f"Fallback — reason: {reason}",
+        "top_pick": "",
+        "rationale": f"Scout failed — {reason}",
         "error": reason,
     }
 
 
 def _fallback_debate(scout_reports: list[dict[str, Any]]) -> dict[str, Any]:
-    top = scout_reports[0].get("top_pick", "AI micro-tools") if scout_reports else "unknown"
+    """Fallback debate when synthesis JSON parse fails. Derives top pick from scout reports."""
+    # Collect picks from successful scouts and pick the most common one
+    picks = [r.get("top_pick", "") for r in scout_reports if r.get("top_pick")]
+    top = max(set(picks), key=picks.count) if picks else ""
+    log.warning("[RESEARCH_NODE] Debate synthesis JSON failed — best scout pick: %s", top)
     return {
-        "consensus_niches": [top],
-        "disagreements": [],
-        "recommended_primary_niche": top,
-        "recommended_venture_type": "MICRO_SAAS",
-        "council_confidence": 0.4,
-        "synthesis": "Debate synthesis failed — Grand CEO must weigh scout memos manually.",
-        "evidence_gaps": ["debate_json_parse_failed"],
+        "consensus_niches":            [top] if top else [],
+        "disagreements":               [],
+        "recommended_primary_niche":   top,
+        "recommended_venture_type":    "MICRO_SAAS",
+        "council_confidence":          0.35,
+        "synthesis":                   "Debate synthesis JSON parse failed — Grand CEO must weigh scout memos manually.",
+        "evidence_gaps":               ["debate_json_parse_failed"],
     }
-
-
-def _mock_council_dossier(
-    trend_snapshot: dict[str, Any],
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    primary = "AI tax automation for freelancers"
-    scout_reports = [
-        {"scout_role": "trend_hunter", "niche_candidates": [
-            {"niche": primary, "venture_type": "MICRO_SAAS", "score": 0.84,
-             "evidence": ["Google Trends +42% 90-day", "Reddit r/freelance top post this week"],
-             "risks": ["seasonal peak Jan-Apr"]}],
-         "top_pick": primary, "rationale": "High growth velocity, finance niche = high RPM."},
-        {"scout_role": "competitor_analyst", "niche_candidates": [
-            {"niche": primary, "venture_type": "MICRO_SAAS", "score": 0.72,
-             "evidence": ["FreshBooks lacks real-time expense classification",
-                          "QuickBooks 1-star: 'too complex for freelancers'"],
-             "risks": ["QuickBooks has brand awareness"]}],
-         "top_pick": primary, "rationale": "Clear moat gap: AI-native simplicity incumbents lack."},
-        {"scout_role": "skeptic", "niche_candidates": [
-            {"niche": primary, "venture_type": "MICRO_SAAS", "score": 0.55,
-             "evidence": ["15+ competitors exist"],
-             "risks": ["tax compliance liability if wrong", "seasonal revenue curve"]}],
-         "top_pick": primary, "rationale": "Viable only if differentiated on AI + simplicity."},
-        {"scout_role": "audience_analyst", "niche_candidates": [
-            {"niche": primary, "venture_type": "MICRO_SAAS", "score": 0.81,
-             "evidence": ["Freelancers spend 8h/month on taxes", "avg pain_score 0.78"],
-             "risks": ["hard to switch from incumbent at tax season"]}],
-         "top_pick": primary, "rationale": "High pain severity, clear willingness to pay $19-29/mo."},
-        {"scout_role": "execution_scout", "niche_candidates": [
-            {"niche": primary, "venture_type": "MICRO_SAAS", "score": 0.79,
-             "evidence": ["React+Vite template covers 90% of UI", "Stripe wiring is straightforward"],
-             "risks": ["Plaid bank integration adds complexity"]}],
-         "top_pick": primary,
-         "rationale": "2-week MVP, 4-week full build. No blockers in our stack."},
-    ]
-    debate_summary = {
-        "consensus_niches": [primary, "faceless YouTube finance channel"],
-        "disagreements": [
-            {"topic": "time-to-revenue", "positions": {
-                "trend_hunter": "Stripe week 3",
-                "skeptic": "6+ months trust building",
-                "execution_scout": "Paying customer by week 6",
-            }},
-        ],
-        "recommended_primary_niche": primary,
-        "recommended_venture_type": "MICRO_SAAS",
-        "council_confidence": 0.73,
-        "synthesis": (
-            "Council consensus: freelancer tax automation is the strongest MICRO_SAAS candidate "
-            "this cycle. Skeptic's main concern (liability) is mitigated by positioning as a "
-            "'tracker and estimator' not a 'tax filer'. Execution Scout confirms 2-week MVP path."
-        ),
-        "evidence_gaps": ["Live Tavily data not fetched", "Competitor pricing not verified"],
-    }
-    dossier_body = {
-        "scout_reports": scout_reports,
-        "debate_summary": debate_summary,
-        "recommended_primary_niche": primary,
-        "recommended_venture_type": "MICRO_SAAS",
-        "consensus_niches": debate_summary["consensus_niches"],
-        "disagreements": debate_summary["disagreements"],
-        "council_confidence": debate_summary["council_confidence"],
-    }
-    debate_transcript = [
-        {"scout": r["scout_role"], "report": r} for r in scout_reports
-    ] + [{"phase": "synthesis", "summary": debate_summary}]
-    return dossier_body, debate_transcript

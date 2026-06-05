@@ -1,25 +1,24 @@
 """
 packages/tools/llm.py
-LLM client factory with proper rate-limit handling.
+LLM client factory — Claude + Gemini dual-provider architecture.
+
+Model assignment philosophy (June 2026):
+  - Gemini 2.5 Pro  : Research Council — 1M context for deep niche research with trend data
+  - Gemini 2.5 Flash: All creative/SEO/ops agents — fast, excellent at content & analysis
+  - Claude Sonnet   : Engineering Team + Legal Agent — best code gen + compliance reasoning
+  - Claude Haiku    : Security, Anti-ban, Deployment, Credential Guardian — fast structured ops
 
 Retry strategy:
   - Transient errors (5xx, network)  : retry up to 3x, exponential backoff (4s→60s)
-  - 429 / quota exhausted            : immediate fallback to Flash (no retry)
+  - 429 / quota exhausted            : immediate fallback to Gemini Flash (no retry)
   - 403 / permission denied          : treated as rate-limit → fallback to Flash
+  - 404 / model not found            : treated as unavailable → fallback to Flash
   - 429 / 403 on Flash               : wait 61 seconds, retry Flash once
   - Empty response (safety filter)   : raise ValueError so fallback fires
-  - All other errors                  : raise immediately
 
-Markdown stripping:
-  All providers sometimes wrap JSON in ```json ... ``` code fences even when
-  instructed not to. _strip_code_fences() is applied to every response before
-  it is returned, so all agents can safely call json.loads(response.text).
-
-Provider status (May 2026):
-  - Gemini:    Google account-level 403 + gemini-2.0-flash 404 deprecated
-  - Anthropic: Fully working — all governance + operational agents on Claude
-  - Kimi:      Working via OpenRouter — Research Council only
-  Swap back to Gemini when Google access is restored.
+Gemini credentials: Set GEMINI_API_KEY in Railway env vars.
+  Get from: aistudio.google.com → Get API Key
+Anthropic credentials: ANTHROPIC_API_KEY
 """
 from __future__ import annotations
 
@@ -42,12 +41,18 @@ from tenacity import (
 
 log = logging.getLogger(__name__)
 
-_FLASH      = "gemini-1.5-flash"          # gemini-2.0-flash deprecated (404); 1.5 is stable
-_FLASH_LITE = "gemini-1.5-flash-8b"      # absolute last resort
-_HAIKU      = "claude-haiku-4-5-20251001" # fast + cheap; replaces Flash while Gemini is down
-# CEO uses Haiku by default (cost optimisation — Sonnet is reserved for Engineering).
-# Override: CEO_MODEL_OVERRIDE=claude-sonnet-4-6 in Railway env.
-_CEO_MODEL  = os.getenv("CEO_MODEL_OVERRIDE", "claude-haiku-4-5-20251001")
+# ── Gemini models ─────────────────────────────────────────────────────────────
+# 2.5-pro:   1M context, best reasoning — Research Council scouts
+# 2.5-flash: Fast + cheap, excellent creative/SEO — operational agents
+# 1.5-flash: Stable fallback if 2.5 quota is exhausted or unavailable
+_GEMINI_PRO   = "gemini-2.5-pro"
+_GEMINI_FLASH = "gemini-2.5-flash"
+_FLASH        = "gemini-1.5-flash"        # stable fallback
+_FLASH_LITE   = "gemini-1.5-flash-8b"    # absolute last resort
+
+# ── Anthropic models ───────────────────────────────────────────────────────────
+_HAIKU      = "claude-haiku-4-5-20251001"  # fast structured ops (security, infra)
+_SONNET     = "claude-sonnet-4-6"          # code gen + legal reasoning
 
 
 # ---------------------------------------------------------------------------
@@ -142,66 +147,81 @@ def _get_anthropic() -> anthropic.AsyncAnthropic:
 # ---------------------------------------------------------------------------
 # Model registry
 # ---------------------------------------------------------------------------
+# Kimi kept as optional override — if KIMI_MODEL env var is set alongside
+# an OpenRouter/DeepInfra key, it will be used for any agent that explicitly
+# requests "kimi" provider. Otherwise all research routes to Gemini 2.5 Pro.
 _KIMI_MODEL = os.getenv("KIMI_MODEL", "moonshotai/kimi-k2.6")
 
 MODEL_REGISTRY: dict[str, tuple[str, str]] = {
-    # ── Research Council (Kimi — 1M context for deep niche research) ──────
-    "KIMI_SCOUT_TREND":        ("kimi", _KIMI_MODEL),
-    "KIMI_SCOUT_COMPETITOR":   ("kimi", _KIMI_MODEL),
-    "KIMI_SCOUT_SKEPTIC":      ("kimi", _KIMI_MODEL),
-    "KIMI_SCOUT_AUDIENCE":     ("kimi", _KIMI_MODEL),
-    "KIMI_SCOUT_EXECUTION":    ("kimi", _KIMI_MODEL),
-    "KIMI_DEBATE_SYNTHESIZER": ("kimi", _KIMI_MODEL),
-    # Legacy scout names (backward compat)
-    "KIMI_SCOUT_OPPORTUNITY":  ("kimi", _KIMI_MODEL),
+    # ── Research Council — Gemini 2.5 Pro ────────────────────────────────────
+    # 1M context window + best multi-step reasoning for structured 5-scout debate.
+    # Gemini 2.5 Pro outperforms Kimi on structured JSON output and debate synthesis.
+    # Falls back to gemini-1.5-flash if 2.5-pro quota is hit or unavailable (404).
+    "KIMI_SCOUT_TREND":        ("gemini", _GEMINI_PRO),
+    "KIMI_SCOUT_COMPETITOR":   ("gemini", _GEMINI_PRO),
+    "KIMI_SCOUT_SKEPTIC":      ("gemini", _GEMINI_PRO),
+    "KIMI_SCOUT_AUDIENCE":     ("gemini", _GEMINI_PRO),
+    "KIMI_SCOUT_EXECUTION":    ("gemini", _GEMINI_PRO),
+    "KIMI_DEBATE_SYNTHESIZER": ("gemini", _GEMINI_PRO),
+    "KIMI_SCOUT_OPPORTUNITY":  ("gemini", _GEMINI_PRO),  # legacy name compat
 
     # ── Governance ────────────────────────────────────────────────────────────
-    # CEO uses Haiku by default (see _CEO_MODEL above). Sonnet reserved for Engineering.
-    "GRAND_CEO":           ("anthropic", _CEO_MODEL),
-    # Legal Agent uses Sonnet: veto power requires best-in-class reasoning and instruction following.
-    # Haiku was producing truncated/malformed JSON responses for complex compliance reviews.
-    "LEGAL_AGENT":         ("anthropic", "claude-sonnet-4-6"),
-    "REVENUE_ENGINE":      ("anthropic", _HAIKU),
-    # Legacy
-    "CEO_NICHE_SCOUT":     ("anthropic", _CEO_MODEL),
+    # CEO: Gemini 2.5 Flash — fast strategic decisions with rich market context
+    # Legal: Claude Sonnet — best compliance reasoning, strict instruction following
+    # Revenue: Gemini 2.5 Flash — financial pattern analysis and portfolio signals
+    "GRAND_CEO":           ("gemini",    _GEMINI_FLASH),
+    "LEGAL_AGENT":         ("anthropic", _SONNET),
+    "REVENUE_ENGINE":      ("gemini",    _GEMINI_FLASH),
+    "CEO_NICHE_SCOUT":     ("gemini",    _GEMINI_FLASH),  # legacy
 
-    # ── Engineering (Claude Sonnet — best code gen) ───────────────────────
-    "ENGINEERING_TEAM":    ("anthropic", "claude-sonnet-4-6"),
+    # ── Engineering — Claude Sonnet ───────────────────────────────────────────
+    # Claude Sonnet 4.6 produces the most correct TypeScript/React/Python code.
+    # This is the single most important agent quality gate — never downgrade it.
+    "ENGINEERING_TEAM":    ("anthropic", _SONNET),
 
-    # ── QA critique (Claude Haiku — precise structured directives) ────────
-    "QA_TECHNICAL_CRITIQUE":   ("anthropic", "claude-haiku-4-5-20251001"),
-    "QA_COMPLIANCE_CRITIQUE":  ("anthropic", "claude-haiku-4-5-20251001"),
-    # Legacy
-    "QA_AUDITOR_CRITIQUE": ("anthropic", "claude-haiku-4-5-20251001"),
+    # ── QA critique — Gemini 2.5 Flash ───────────────────────────────────────
+    # Fast, precise structured JSON critique directives for build failures.
+    "QA_TECHNICAL_CRITIQUE":   ("gemini", _GEMINI_FLASH),
+    "QA_COMPLIANCE_CRITIQUE":  ("gemini", _GEMINI_FLASH),
+    "QA_AUDITOR_CRITIQUE":     ("gemini", _GEMINI_FLASH),  # legacy
 
-    # ── Operational agents — Claude Haiku (fast, cheap, no Google dependency) ──
-    # gemini-2.0-flash deprecated (404 May 2026). Swap back when Google is stable.
-    "PRODUCT_VP":          ("anthropic", _HAIKU),
-    "PRODUCT_MANAGER":     ("anthropic", _HAIKU),
-    "MEDIA_VP":            ("anthropic", _HAIKU),
-    "SCRIPT_AGENT":        ("anthropic", _HAIKU),
-    "VOICE_AGENT":         ("anthropic", _HAIKU),
-    "VIDEO_AGENT":         ("anthropic", _HAIKU),
-    "THUMBNAIL_AGENT":     ("anthropic", _HAIKU),
-    "SEO_METADATA_AGENT":  ("anthropic", _HAIKU),
-    "QA_TECHNICAL_GATE":   ("anthropic", _HAIKU),
-    "QA_COMPLIANCE_GATE":  ("anthropic", _HAIKU),
+    # ── Product agents — Gemini 2.5 Flash ────────────────────────────────────
+    # Gemini excels at business analysis, market positioning, and product strategy.
+    "PRODUCT_VP":          ("gemini", _GEMINI_FLASH),
+    "PRODUCT_MANAGER":     ("gemini", _GEMINI_FLASH),
+    "PRODUCT_GROWTH":      ("gemini", _GEMINI_FLASH),
+    "MARKETING_SEO":       ("gemini", _GEMINI_FLASH),
+
+    # ── Media agents — Gemini 2.5 Flash ──────────────────────────────────────
+    # Creative scriptwriting, SEO metadata, and thumbnail prompts are Gemini strengths.
+    # Gemini has seen more YouTube/TikTok content and produces better hooks + titles.
+    "MEDIA_VP":            ("gemini", _GEMINI_FLASH),
+    "SCRIPT_AGENT":        ("gemini", _GEMINI_FLASH),
+    "SEO_METADATA_AGENT":  ("gemini", _GEMINI_FLASH),
+    "THUMBNAIL_AGENT":     ("gemini", _GEMINI_FLASH),
+    "PUBLISHING_AGENT":    ("gemini", _GEMINI_FLASH),
+    "ANALYTICS_AGENT":     ("gemini", _GEMINI_FLASH),
+    "MEDIA_GROWTH":        ("gemini", _GEMINI_FLASH),
+    "VOICE_AGENT":         ("gemini", _GEMINI_FLASH),
+    "VIDEO_AGENT":         ("gemini", _GEMINI_FLASH),
+
+    # ── Security / Infra — Claude Haiku ──────────────────────────────────────
+    # Security and anti-ban agents need conservative, precise pattern matching.
+    # Claude Haiku's training makes it more reliable for security-sensitive ops.
     "SECURITY_AGENT":      ("anthropic", _HAIKU),
     "ANTI_BAN_AGENT":      ("anthropic", _HAIKU),
     "DEPLOYMENT_AGENT":    ("anthropic", _HAIKU),
-    "MARKETING_SEO":       ("anthropic", _HAIKU),
-    "PUBLISHING_AGENT":    ("anthropic", _HAIKU),
-    "ANALYTICS_AGENT":     ("anthropic", _HAIKU),
-    "PRODUCT_GROWTH":      ("anthropic", _HAIKU),
-    "MEDIA_GROWTH":        ("anthropic", _HAIKU),
-    # Legacy
-    "PRODUCT_TEAM":        ("anthropic", _HAIKU),
-    "CONTENT_TEAM":        ("anthropic", _HAIKU),
-    "MARKETING_TEAM":      ("anthropic", _HAIKU),
-    "GLOBAL_TEAM":         ("anthropic", _HAIKU),
-    "GROWTH_TEAM":         ("anthropic", _HAIKU),
+    "QA_TECHNICAL_GATE":   ("anthropic", _HAIKU),
+    "QA_COMPLIANCE_GATE":  ("anthropic", _HAIKU),
+    "QA_AUDITOR_GATE":     ("anthropic", _HAIKU),  # legacy
+
+    # Legacy agent names — backward compat with old pipeline runs
+    "PRODUCT_TEAM":        ("gemini",    _GEMINI_FLASH),
+    "CONTENT_TEAM":        ("gemini",    _GEMINI_FLASH),
+    "MARKETING_TEAM":      ("gemini",    _GEMINI_FLASH),
+    "GLOBAL_TEAM":         ("gemini",    _GEMINI_FLASH),
+    "GROWTH_TEAM":         ("gemini",    _GEMINI_FLASH),
     "DEPLOYMENT_TEAM":     ("anthropic", _HAIKU),
-    "QA_AUDITOR_GATE":     ("anthropic", _HAIKU),
 }
 
 # ---------------------------------------------------------------------------
@@ -227,17 +247,21 @@ class LLMResponse:
 # ---------------------------------------------------------------------------
 def _is_rate_limit(exc: Exception) -> bool:
     """
-    Detect 429 / quota errors from google-genai.
+    Detect errors that should trigger a fallback to a lower/stable model.
     Checks the exception itself AND its cause chain (tenacity wraps in RetryError).
+
+    Triggers fallback:
+      - 429 / quota exhausted     → rate limited
+      - 403 / permission denied   → no access to this model tier
+      - 404 / not found           → model deprecated or not yet available in your region
     """
     def _check(e: BaseException) -> bool:
         s = str(e).lower()
         return any(k in s for k in (
             "429", "quota", "rate_limit", "resource_exhausted",
             "too many requests", "rate exceeded",
-            # 403 PERMISSION_DENIED — treated as "no access to this model tier",
-            # so we fall back to Flash exactly like a rate limit.
             "403", "permission_denied", "denied access",
+            "404", "not found", "model not found",  # model unavailable → fallback to 1.5-flash
         ))
 
     if _check(exc):

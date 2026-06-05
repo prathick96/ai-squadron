@@ -287,8 +287,18 @@ async def test_pipeline_dry_run_saas():
     mock_db.table.return_value.upsert.return_value.execute.return_value = None
     mock_db.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
 
+    # Minimal trend snapshot returned by the mock — no pytrends or Tavily needed
+    _mock_trends = {"topics": [], "rising": [], "fetched_at": "2026-06-05T00:00:00Z"}
+
     patches = [
         patch("packages.tools.llm.call_llm", side_effect=smart_llm),
+        # Research council now always runs live — patch call_llm at the local binding too
+        # (research_council uses 'from packages.tools.llm import call_llm' so we must
+        # patch the name in its own namespace, not just on the source module)
+        patch("packages.agents.governance.research_council.call_llm", side_effect=smart_llm),
+        # Mock trend snapshot so pytrends / Tavily are never called in tests
+        patch("packages.agents.governance.research_council.fetch_trend_snapshot",
+              new=AsyncMock(return_value=_mock_trends)),
         # Mock npm install and vite build — return success without hitting disk/Node
         patch("packages.agents.product.engineering_team._run_npm_install",
               new=AsyncMock(return_value=(0, ""))),

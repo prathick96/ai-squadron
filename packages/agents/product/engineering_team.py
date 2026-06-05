@@ -475,7 +475,10 @@ async def engineering_team_node(state: AgentState) -> AgentState:
 
     # ---- Call LLM ----
     venture_brief = state.get("venture_brief") or {}
-    niche         = venture_brief.get("niche", tech_spec.get("venture_id", "productivity tool"))
+    niche = venture_brief.get("niche") or tech_spec.get("niche") or tech_spec.get("venture_id") or ""
+    if not niche:
+        log.error("[ENGINEERING_NODE] niche not found in venture_brief or tech_spec — pipeline state incomplete")
+
     venture_type  = tech_spec.get("product_type", "MICRO_SAAS")
     user_prompt = (
         _RETRY_TEMPLATE.format(

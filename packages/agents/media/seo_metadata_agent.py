@@ -70,7 +70,9 @@ async def seo_metadata_node(state: AgentState) -> AgentState:
 
     platform = script.get("platform", "youtube")
     keyword = script.get("target_keyword", "AI tools")
-    niche = strategy.get("channel_tagline", "AI productivity")
+    niche = strategy.get("channel_tagline") or strategy.get("niche") or ""
+    if not niche:
+        log.warning("[SEO_METADATA_NODE] niche/tagline not in channel_strategy — SEO context will be limited")
     duration = script.get("estimated_duration_sec", 480)
 
     log.info("[SEO_METADATA_NODE] Generating metadata | venture=%s platform=%s",
