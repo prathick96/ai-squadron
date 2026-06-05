@@ -251,7 +251,7 @@ export default function UserDashboard() {
                           marginBottom: 8,
                         }}
                       >
-                        {ds?.loading ? '⏳ Deploying…' : '🚀 Deploy to Vercel'}
+                        {ds?.loading ? '⏳ Deploying…' : '🚀 Deploy to Railway'}
                       </button>
                     )}
 
@@ -303,7 +303,7 @@ export default function UserDashboard() {
 }
 
 function RunCard({ venture: v }: { venture: Venture }) {
-  const STAGES = ['RESEARCH','CEO','PRODUCT_VP','PRODUCT_MANAGER','ENGINEERING','QA_TECHNICAL','LEGAL','SECURITY','ACCOUNT_DISTRIBUTION','DEPLOYMENT','MARKETING_SEO','PRODUCT_GROWTH']
+  const STAGES = ['RESEARCH','CEO','PRODUCT_VP','PRODUCT_MANAGER','ENGINEERING','QA_TECHNICAL','SECURITY','LEGAL','DEPLOYMENT','MARKETING_SEO','PRODUCT_GROWTH']
   const stage = v.current_stage.replace(/_NODE$/, '').replace(/_/g, ' ')
   const idx   = STAGES.findIndex(s => v.current_stage.includes(s))
   const pct   = idx >= 0 ? Math.round(((idx + 1) / STAGES.length) * 100) : 5

@@ -44,11 +44,12 @@ log = logging.getLogger(__name__)
 # ── Gemini models ─────────────────────────────────────────────────────────────
 # 2.5-pro:   1M context, best reasoning — Research Council scouts
 # 2.5-flash: Fast + cheap, excellent creative/SEO — operational agents
-# 1.5-flash: Stable fallback if 2.5 quota is exhausted or unavailable
+# 2.0-flash: Stable GA fallback if 2.5 quota is exhausted or rate-limited
+# 2.0-flash-lite: Absolute last resort — cheapest, fastest, lowest quota
 _GEMINI_PRO   = "gemini-2.5-pro"
 _GEMINI_FLASH = "gemini-2.5-flash"
-_FLASH        = "gemini-1.5-flash"        # stable fallback
-_FLASH_LITE   = "gemini-1.5-flash-8b"    # absolute last resort
+_FLASH        = "gemini-2.0-flash"        # GA stable fallback (replaces deprecated 1.5-flash)
+_FLASH_LITE   = "gemini-2.0-flash-lite"  # absolute last resort (replaces deprecated 1.5-flash-8b)
 
 # ── Anthropic models ───────────────────────────────────────────────────────────
 _HAIKU      = "claude-haiku-4-5-20251001"  # fast structured ops (security, infra)
@@ -354,7 +355,7 @@ async def _call_gemini(
 ) -> LLMResponse:
     """
     Call hierarchy on rate limits:
-      gemini-2.5-pro  → (429) → gemini-2.0-flash  → (429) → wait 61s → retry flash
+      gemini-2.5-pro  → (429) → gemini-2.0-flash → (429) → wait 61s → retry 2.0-flash
     """
     try:
         return await _gemini_raw(model_name, system_prompt, user_prompt,
