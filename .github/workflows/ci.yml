@@ -28,7 +28,7 @@ jobs:
           # Disable live external API calls so tests are hermetic
           TRENDS_LIVE: "false"
           # Supabase not configured → NullDB fallback (all writes are no-ops)
-          # No GEMINI_API_KEY / ANTHROPIC_API_KEY → LLM tests check for env errors
+          # No ANTHROPIC_API_KEY → LLM tests use mocked _call_anthropic
           # No PLAYWRIGHT → playwright_runner returns (True, ["playwright_skip"])
         run: pytest tests/ -v --tb=short --no-header
 

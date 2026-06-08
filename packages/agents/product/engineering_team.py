@@ -144,7 +144,9 @@ export default defineConfig({
     }, indent=2),
 
     # ------------------------------------------------------------------
-    # index.html — inline reset so the page looks clean before React mounts
+    # index.html — inline reset + security meta tags
+    # Primary security headers come from nginx (CSP, HSTS, etc.).
+    # Meta tags here are a belt-and-suspenders fallback for local dev.
     # ------------------------------------------------------------------
     "index.html": """\
 <!doctype html>
@@ -152,6 +154,13 @@ export default defineConfig({
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Security: prevent MIME sniffing -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <!-- Security: prevent clickjacking in browsers that don't honour the header -->
+    <meta http-equiv="X-Frame-Options" content="SAMEORIGIN" />
+    <!-- Security: CSP fallback for local dev (nginx provides the authoritative header) -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.paddle.com https://us.i.posthog.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://us.i.posthog.com https://api.razorpay.com https://lumberjack.razorpay.com; frame-src https://api.razorpay.com; frame-ancestors 'none';" />
     <title>App</title>
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -318,6 +327,36 @@ export default function SetupRequired() {
 """,
 
     # ------------------------------------------------------------------
+    # src/components/LegalFooter.tsx — platform legal links on every app.
+    # Satisfies Razorpay's refund policy visibility requirement at the app level.
+    # ------------------------------------------------------------------
+    "src/components/LegalFooter.tsx": """\
+export default function LegalFooter() {
+  return (
+    <footer style={{
+      marginTop: 'auto',
+      borderTop: '1px solid #e2e8f0',
+      padding: '16px 24px',
+      textAlign: 'center',
+      fontSize: 12,
+      color: '#94a3b8',
+      background: '#f8fafc',
+    }}>
+      <span>Powered by AI Squadron · </span>
+      <a href="https://ai-squadron.app/legal/terms" target="_blank" rel="noreferrer"
+         style={{ color: '#7c3aed', textDecoration: 'none' }}>Terms</a>
+      {' · '}
+      <a href="https://ai-squadron.app/legal/privacy" target="_blank" rel="noreferrer"
+         style={{ color: '#7c3aed', textDecoration: 'none' }}>Privacy</a>
+      {' · '}
+      <a href="https://ai-squadron.app/legal/refund" target="_blank" rel="noreferrer"
+         style={{ color: '#7c3aed', textDecoration: 'none' }}>Refund Policy</a>
+    </footer>
+  )
+}
+""",
+
+    # ------------------------------------------------------------------
     # src/App.tsx — routing shell.  Moved from LLM → scaffold because LLM
     # was the #1 source of TypeScript errors and React mount failures.
     # Shows SetupRequired until VITE_SUPABASE_* are configured.
@@ -326,6 +365,7 @@ export default function SetupRequired() {
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
 import { isSupabaseConfigured } from './lib/supabase'
 import SetupRequired from './components/SetupRequired'
+import LegalFooter from './components/LegalFooter'
 import Home from './pages/Home'
 
 export default function App() {
@@ -335,24 +375,27 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <nav style={{
-        padding: '0 24px',
-        height: 52,
-        borderBottom: '1px solid #e2e8f0',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 24,
-        background: '#fff',
-      }}>
-        <Link to="/" style={{ fontWeight: 700, textDecoration: 'none', color: '#0f172a', fontSize: 16 }}>
-          App
-        </Link>
-      </nav>
-      <main style={{ padding: '32px 24px', maxWidth: 1100, margin: '0 auto' }}>
-        <Routes>
-          <Route path="/" element={<Home />} />
-        </Routes>
-      </main>
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+        <nav style={{
+          padding: '0 24px',
+          height: 52,
+          borderBottom: '1px solid #e2e8f0',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 24,
+          background: '#fff',
+        }}>
+          <Link to="/" style={{ fontWeight: 700, textDecoration: 'none', color: '#0f172a', fontSize: 16 }}>
+            App
+          </Link>
+        </nav>
+        <main style={{ padding: '32px 24px', maxWidth: 1100, margin: '0 auto', flex: 1, width: '100%' }}>
+          <Routes>
+            <Route path="/" element={<Home />} />
+          </Routes>
+        </main>
+        <LegalFooter />
+      </div>
     </BrowserRouter>
   )
 }
@@ -379,9 +422,10 @@ ALREADY PROVIDED BY SCAFFOLD (do NOT regenerate):
   package.json, vite.config.ts, tsconfig.json, index.html
   src/vite-env.d.ts
   src/main.tsx         — React root, QueryClient, PostHog
-  src/App.tsx          — BrowserRouter, routes, nav, SetupRequired gate
+  src/App.tsx          — BrowserRouter, routes, nav, LegalFooter, SetupRequired gate
   src/lib/supabase.ts  — exports: supabase (SupabaseClient | null), isSupabaseConfigured
   src/components/SetupRequired.tsx  — shown when Supabase env vars missing
+  src/components/LegalFooter.tsx    — platform Terms/Privacy/Refund links (every app)
 
 GENERATE ONLY THESE 3 FILES (max 80 lines each):
 
@@ -407,6 +451,15 @@ STRICT RULES:
   NEVER import from @supabase/supabase-js directly (use ../lib/supabase instead)
   Keep each file under 80 lines
   Use plain inline styles — no CSS modules, no Tailwind, no styled-components
+
+SECURITY RULES (enforced by QA and Security agents):
+  NEVER hardcode secrets, API keys, tokens, or passwords in source — use import.meta.env.VITE_*
+  NEVER use dangerouslySetInnerHTML — use React's text rendering instead
+  NEVER store auth tokens in localStorage — Supabase handles session storage securely
+  NEVER log sensitive fields: console.log(password), console.log(token), etc.
+  NEVER use string interpolation in database queries — use Supabase typed selectors
+  ALWAYS guard Supabase calls: if (!supabase) return (never assume it's configured)
+  ALWAYS handle errors gracefully — never expose stack traces or internal paths to users
 
 SUPABASE PATTERN (use exactly):
   import { supabase } from '../lib/supabase'
@@ -465,7 +518,10 @@ async def engineering_team_node(state: AgentState) -> AgentState:
 
     # ---- Call LLM ----
     venture_brief = state.get("venture_brief") or {}
-    niche         = venture_brief.get("niche", tech_spec.get("venture_id", "productivity tool"))
+    niche = venture_brief.get("niche") or tech_spec.get("niche") or tech_spec.get("venture_id") or ""
+    if not niche:
+        log.error("[ENGINEERING_NODE] niche not found in venture_brief or tech_spec — pipeline state incomplete")
+
     venture_type  = tech_spec.get("product_type", "MICRO_SAAS")
     user_prompt = (
         _RETRY_TEMPLATE.format(

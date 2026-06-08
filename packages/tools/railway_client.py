@@ -1,20 +1,28 @@
 """
 packages/tools/railway_client.py
-Railway REST + GraphQL API client for programmatic SaaS deployments.
+Railway REST + GraphQL deployment client for AI Squadron SaaS ventures.
 
 Deployment flow
----------------
-1. Get or create one Railway project for the whole AI Squadron org
-   (uses RAILWAY_PROJECT_ID if set, otherwise finds/creates "ai-squadron")
-2. Get or create a service per venture_id inside that project
-3. Pack build_dir into a .tar.gz (node_modules excluded)
-4. POST tarball to Railway's upload endpoint → uploadId
-5. GraphQL deploymentCreate(serviceId, environmentId, uploadId)
-6. Poll deployment.status until SUCCESS or terminal failure
-7. Return the live HTTPS URL
+--------------
+1. Resolve project + environment (3-tier: auto-injected IDs → project lookup → me query)
+2. Get or create a Railway service for this venture
+3. Get or create a Railway domain for the service (so we have the URL before deploy)
+4. Pack dist/ + Dockerfile + nginx.conf into a .tar.gz
+5. POST tarball to Railway upload endpoint → uploadId
+6. deploymentCreate(serviceId, environmentId, sourceUploadId)
+7. Poll until SUCCESS / FAILED / CRASHED
+8. Return the service domain URL
 
-Required env var: RAILWAY_TOKEN
-Optional env var: RAILWAY_PROJECT_ID  (if omitted, project is auto-managed)
+WHY Dockerfile instead of Nixpacks:
+  • Generated package.json has no `start` script — Nixpacks can't run the app after building.
+    This was the root cause of "services created, nothing deployed."
+  • Docker + nginx is 30-60s vs 2-3 min for a full Nixpacks rebuild from source.
+  • Predictable: always serves the pre-built dist/ on port 8080, SPA routing included.
+
+WHY service domain instead of deployment.url:
+  • deployment.url is null for Nixpacks/Docker deployments on Railway (it's set only for
+    static-file deployments, not container workloads).
+  • The real URL lives on serviceInstance.domains — we query/create it before deploying.
 """
 from __future__ import annotations
 
@@ -29,17 +37,107 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-
-def _ssl_verify() -> bool:
-    return os.getenv("HTTPX_SSL_VERIFY", "true").lower() != "false"
-
 _GRAPHQL_URL   = "https://backboard.railway.app/graphql/v2"
-_UPLOAD_URL    = "https://backboard.railway.app/deployments/uploads"
-_POLL_INTERVAL = 5    # seconds between status checks
-_DEPLOY_TIMEOUT = 300  # 5 minutes max
+_POLL_INTERVAL = 8     # seconds between status checks
+_DEPLOY_TIMEOUT = 600  # 10 minutes — Docker build + container start
 
-# Directories excluded from the deployment tarball
-_EXCLUDE_DIRS = {"node_modules", ".git", ".cache", "dist", "__pycache__"}
+_EXCLUDE_DIRS = {"node_modules", ".git", ".cache", "__pycache__", ".vite"}
+
+# ─── Embedded Dockerfile for static SPA serving ───────────────────────────────
+# Railway detects the Dockerfile and uses Docker instead of Nixpacks.
+# nginx:alpine is ~20MB and starts in <1s.  Port 8080 matches EXPOSE below.
+_DOCKERFILE = """\
+FROM nginx:1.27-alpine
+
+# Copy pre-built assets
+COPY dist/ /usr/share/nginx/html/
+
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Railway routes to whatever port $PORT specifies (default 8080)
+ENV PORT=8080
+EXPOSE 8080
+
+CMD ["nginx", "-g", "daemon off;"]
+"""
+
+# SPA nginx config — serves index.html for all unknown routes (client-side routing).
+# Includes hardened security headers and rate limiting for all deployed products.
+_NGINX_CONF = """\
+# Rate limiting: 30 req/s per IP, burst of 60 — protects against scraping and brute force
+limit_req_zone $binary_remote_addr zone=per_ip:10m rate=30r/s;
+
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Hide nginx version from attackers
+    server_tokens off;
+
+    # ── Security headers ──────────────────────────────────────────────────
+    # Prevent clickjacking
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    # Prevent MIME-type sniffing
+    add_header X-Content-Type-Options "nosniff" always;
+    # Block reflected XSS (legacy browsers)
+    add_header X-XSS-Protection "1; mode=block" always;
+    # Limit referrer information leakage
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    # Restrict browser features
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(self)" always;
+    # Content Security Policy — allows Supabase, PostHog, Paddle; blocks inline eval
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.paddle.com https://us.i.posthog.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co https://us.i.posthog.com https://api.razorpay.com https://lumberjack.razorpay.com; frame-src https://api.razorpay.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
+    # HSTS — tell browsers to always use HTTPS (1 year)
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # Apply rate limiting to all requests
+    limit_req zone=per_ip burst=60 nodelay;
+
+    # React / Vue / Svelte SPA: unknown paths → index.html
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Cache hashed assets forever (Vite fingerprints filenames)
+    # .map files are excluded from production — source maps expose source code
+    location ~* \\.(js|css|woff2|woff|ttf|eot|ico|png|jpg|jpeg|gif|svg|webp)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+
+    # Block source map files in production (security: don't expose minified source)
+    location ~* \\.map$ {
+        return 404;
+        access_log off;
+    }
+
+    # Block access to hidden files (.env, .git, etc.)
+    location ~ /\\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+
+    # Health check endpoint for Railway (no rate limit, no headers logged)
+    location /healthz {
+        limit_req off;
+        return 200 "ok";
+        add_header Content-Type text/plain;
+        access_log off;
+    }
+
+    gzip on;
+    gzip_types text/plain text/css application/javascript application/json
+               image/svg+xml application/font-woff2;
+    gzip_min_length 1024;
+    # Don't gzip already-compressed formats
+    gzip_disable "msie6";
+}
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -47,74 +145,73 @@ _EXCLUDE_DIRS = {"node_modules", ".git", ".cache", "dist", "__pycache__"}
 # ---------------------------------------------------------------------------
 
 def _get_railway_token() -> str:
-    """Accept RAILWAY_TOKEN or RAILWAY_API_TOKEN — whichever is set."""
     return os.getenv("RAILWAY_TOKEN", "") or os.getenv("RAILWAY_API_TOKEN", "")
 
 
 def railway_available() -> bool:
-    """True when RAILWAY_TOKEN (or RAILWAY_API_TOKEN) is configured."""
     token = _get_railway_token()
     return bool(token and len(token) > 10 and not token.startswith("your_"))
 
 
 async def deploy_to_railway(venture_id: str, build_dir: Path) -> str:
     """
-    Deploy a Vite build directory to Railway.
-
-    Returns the live HTTPS URL on success.
-    Raises RuntimeError if the deployment fails or times out.
+    Deploy the dist/ folder to Railway via Docker + nginx.
+    Returns the live https://*.up.railway.app URL.
+    Raises RuntimeError on failure.
     """
-    token        = _token()
-    project_name = "ai-squadron"
-    service_name = venture_id[:30]
+    token        = _get_railway_token()
+    service_name = f"aisq-{venture_id[:24].replace('_', '-')}"
 
-    async with httpx.AsyncClient(timeout=30.0, verify=_ssl_verify()) as client:
-        # Railway auto-injects RAILWAY_PROJECT_ID and RAILWAY_ENVIRONMENT_ID for
-        # every running service.  Use them directly to skip the GetProject GQL
-        # call — that call fails with 400 when the token is a project-scoped
-        # deploy key rather than a full Personal Access Token (PAT).
-        injected_project = os.getenv("RAILWAY_PROJECT_ID", "")
-        injected_env     = (
-            os.getenv("RAILWAY_ENVIRONMENT_ID", "")
-            or os.getenv("RAILWAY_ENVIRONMENT", "")
-        )
+    forced_pid = os.getenv("RAILWAY_PROJECT_ID", "")
+    forced_env = os.getenv("RAILWAY_ENVIRONMENT_ID", "")
 
-        if injected_project and injected_env:
-            project_id = injected_project
-            env_id     = injected_env
-            log.info("[RAILWAY] Using injected ids project=%s env=%s",
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # ── 1. Resolve project + environment ────────────────────────────────
+        if forced_pid and forced_env:
+            project_id, env_id = forced_pid, forced_env
+            log.info("[RAILWAY] Using injected project=%s env=%s",
                      project_id[:8], env_id[:8])
+        elif forced_pid:
+            data = await _gql(client, token, _Q_PROJECT_BY_ID, {"id": forced_pid})
+            envs = _unwrap_edges(data["project"]["environments"])
+            project_id, env_id = forced_pid, _pick_prod_env(envs)
+            log.info("[RAILWAY] project=%s env=%s (env resolved)", project_id[:8], env_id[:8])
         else:
-            project_id, env_id = await _get_or_create_project(client, token, project_name)
+            log.info("[RAILWAY] No RAILWAY_PROJECT_ID — running me-query (User Token)")
+            project_id, env_id = await _get_or_create_project(client, token, "ai-squadron")
+            log.info("[RAILWAY] project=%s env=%s", project_id[:8], env_id[:8])
 
-        service_id = await _get_or_create_service(client, token, project_id, service_name)
-        log.info("[RAILWAY] project=%s service=%s env=%s",
-                 project_id[:8], service_id[:8], env_id[:8])
+        # ── 2. Service ───────────────────────────────────────────────────────
+        service_id = await _get_or_create_service(
+            client, token, project_id, service_name
+        )
+        log.info("[RAILWAY] service=%s (%s)", service_id[:8], service_name)
 
-        tarball     = _make_tarball(build_dir)
-        log.info("[RAILWAY] Tarball ready | size=%.1f KB", len(tarball) / 1024)
+        # ── 3. Domain — get or create BEFORE deploying so we have the URL ───
+        domain_url = await _ensure_service_domain(client, token, service_id, env_id)
+        log.info("[RAILWAY] domain=%s", domain_url)
 
-        upload_id   = await _upload_tarball(client, token, tarball)
-        log.info("[RAILWAY] Upload complete | uploadId=%s", upload_id[:8])
+        # ── 4. Tarball — dist/ + Dockerfile + nginx.conf ────────────────────
+        tarball = _make_tarball(build_dir)
+        log.info("[RAILWAY] Tarball %.1f KB", len(tarball) / 1024)
 
-        deploy_id   = await _create_deployment(client, token, service_id, env_id, upload_id)
-        log.info("[RAILWAY] Deployment queued | deploymentId=%s", deploy_id[:8])
+        # ── 5. Upload ────────────────────────────────────────────────────────
+        upload_id = await _upload_tarball(client, token, tarball)
+        log.info("[RAILWAY] uploadId=%s", upload_id[:16] if upload_id else "?")
 
-        url         = await _poll_deployment(client, token, deploy_id)
-        return url or f"https://{service_name}.up.railway.app"
+        # ── 6. Create deployment ─────────────────────────────────────────────
+        deploy_id = await _create_deployment(client, token, service_id, env_id, upload_id)
+        log.info("[RAILWAY] deploymentId=%s — polling…", deploy_id[:16])
+
+        # ── 7. Poll until SUCCESS ────────────────────────────────────────────
+        await _poll_deployment(client, token, deploy_id)
+
+        return domain_url or f"https://{service_name}.up.railway.app"
 
 
 # ---------------------------------------------------------------------------
-# Internal — GraphQL helpers
+# GraphQL helper
 # ---------------------------------------------------------------------------
-
-def _token() -> str:
-    return _get_railway_token()
-
-
-def _auth_headers(token: str) -> dict:
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
 
 async def _gql(
     client: httpx.AsyncClient,
@@ -125,29 +222,45 @@ async def _gql(
     resp = await client.post(
         _GRAPHQL_URL,
         json={"query": query, "variables": variables},
-        headers=_auth_headers(token),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         timeout=30.0,
     )
+    try:
+        body_text = resp.text
+    except Exception:
+        body_text = "<unreadable>"
+
     if not resp.is_success:
-        body_preview = resp.text[:600]
-        raise RuntimeError(
-            f"Railway API HTTP {resp.status_code} — {body_preview}\n"
-            "Hint: RAILWAY_TOKEN must be a Personal Access Token (PAT) from "
-            "railway.app/account/tokens, not a project/service deploy token."
-        )
+        log.error("[RAILWAY] HTTP %d | body=%s", resp.status_code, body_text[:500])
+        raise RuntimeError(f"Railway HTTP {resp.status_code}: {body_text[:300]}")
+
     body = resp.json()
     if errors := body.get("errors"):
-        raise RuntimeError(f"Railway GraphQL error: {errors[0].get('message', errors)}")
+        msg = errors[0].get("message", str(errors))
+        log.error("[RAILWAY] GraphQL error: %s", msg)
+        raise RuntimeError(f"Railway GraphQL error: {msg}")
+
     return body["data"]
 
 
 # ---------------------------------------------------------------------------
-# Internal — Project / service management
+# Project management
 # ---------------------------------------------------------------------------
 
-_Q_PROJECTS = """
-query ListProjects {
-  projects { nodes { id name environments { nodes { id name } } } }
+_Q_MY_PROJECTS = """
+query MyProjects {
+  me {
+    id
+    projects {
+      edges {
+        node {
+          id
+          name
+          environments { edges { node { id name } } }
+        }
+      }
+    }
+  }
 }
 """
 
@@ -155,14 +268,17 @@ _M_CREATE_PROJECT = """
 mutation CreateProject($name: String!) {
   projectCreate(input: { name: $name }) {
     id
-    environments { nodes { id name } }
+    environments { edges { node { id name } } }
   }
 }
 """
 
-_M_CREATE_SERVICE = """
-mutation CreateService($projectId: ID!, $name: String!) {
-  serviceCreate(input: { projectId: $projectId, name: $name }) { id name }
+_Q_PROJECT_BY_ID = """
+query ProjectById($id: String!) {
+  project(id: $id) {
+    id
+    environments { edges { node { id name } } }
+  }
 }
 """
 
@@ -172,29 +288,44 @@ async def _get_or_create_project(
     token: str,
     name: str,
 ) -> tuple[str, str]:
-    """Returns (project_id, production_env_id)."""
-    forced_id = os.getenv("RAILWAY_PROJECT_ID", "")
-    if forced_id:
-        data = await _gql(client, token, """
-            query GetProject($id: ID!) {
-              project(id: $id) { id environments { nodes { id name } } }
-            }
-        """, {"id": forced_id})
-        envs = data["project"]["environments"]["nodes"]
-        env_id = _pick_prod_env(envs)
-        return forced_id, env_id
+    try:
+        data = await _gql(client, token, _Q_MY_PROJECTS, {})
+    except Exception as exc:
+        raise RuntimeError(
+            "Railway 'me' query failed — set RAILWAY_PROJECT_ID env var "
+            "OR use a User Account Token (Account Settings → Tokens).\n"
+            f"Detail: {exc}"
+        ) from exc
 
-    data = await _gql(client, token, _Q_PROJECTS, {})
-    for project in data.get("projects", {}).get("nodes", []):
-        if project["name"] == name:
-            envs = project["environments"]["nodes"]
-            return project["id"], _pick_prod_env(envs)
+    projects = _unwrap_edges(data["me"]["projects"])
+    for p in projects:
+        if p["name"] == name:
+            envs = _unwrap_edges(p["environments"])
+            return p["id"], _pick_prod_env(envs)
 
-    # Create new project
-    data = await _gql(client, token, _M_CREATE_PROJECT, {"name": name})
+    data    = await _gql(client, token, _M_CREATE_PROJECT, {"name": name})
     project = data["projectCreate"]
-    envs = project["environments"]["nodes"]
+    envs    = _unwrap_edges(project["environments"])
     return project["id"], _pick_prod_env(envs)
+
+
+# ---------------------------------------------------------------------------
+# Service management
+# ---------------------------------------------------------------------------
+
+_Q_SERVICES = """
+query GetServices($projectId: String!) {
+  project(id: $projectId) {
+    services { edges { node { id name } } }
+  }
+}
+"""
+
+_M_CREATE_SERVICE = """
+mutation CreateService($projectId: String!, $name: String!) {
+  serviceCreate(input: { projectId: $projectId, name: $name }) { id name }
+}
+"""
 
 
 async def _get_or_create_service(
@@ -203,93 +334,209 @@ async def _get_or_create_service(
     project_id: str,
     service_name: str,
 ) -> str:
-    """Returns service_id, creating the service if it doesn't exist."""
-    data = await _gql(client, token, """
-        query GetServices($projectId: ID!) {
-          project(id: $projectId) { services { nodes { id name } } }
-        }
-    """, {"projectId": project_id})
-
-    for svc in data["project"]["services"]["nodes"]:
+    data     = await _gql(client, token, _Q_SERVICES, {"projectId": project_id})
+    services = _unwrap_edges(data["project"]["services"])
+    for svc in services:
         if svc["name"] == service_name:
+            log.info("[RAILWAY] Reusing service %s", svc["id"][:8])
             return svc["id"]
 
     data = await _gql(client, token, _M_CREATE_SERVICE,
                       {"projectId": project_id, "name": service_name})
-    return data["serviceCreate"]["id"]
-
-
-def _pick_prod_env(envs: list[dict]) -> str:
-    """Return production environment id, or first available."""
-    for e in envs:
-        if e["name"].lower() in ("production", "prod"):
-            return e["id"]
-    return envs[0]["id"] if envs else ""
+    sid = data["serviceCreate"]["id"]
+    log.info("[RAILWAY] Created service %s", sid[:8])
+    return sid
 
 
 # ---------------------------------------------------------------------------
-# Internal — Tarball
+# Service domain — get or create the *.up.railway.app public URL
 # ---------------------------------------------------------------------------
+
+_Q_SERVICE_INSTANCE = """
+query ServiceInstance($serviceId: String!, $environmentId: String!) {
+  serviceInstance(serviceId: $serviceId, environmentId: $environmentId) {
+    domains {
+      serviceDomains { domain }
+    }
+  }
+}
+"""
+
+_M_SERVICE_DOMAIN_CREATE = """
+mutation ServiceDomainCreate($serviceId: String!, $environmentId: String!) {
+  serviceDomainCreate(input: {
+    serviceId: $serviceId
+    environmentId: $environmentId
+  }) {
+    domain
+  }
+}
+"""
+
+
+async def _ensure_service_domain(
+    client: httpx.AsyncClient,
+    token: str,
+    service_id: str,
+    env_id: str,
+) -> str:
+    """Return https://... URL for this service. Creates a domain if none exists."""
+    try:
+        data = await _gql(client, token, _Q_SERVICE_INSTANCE, {
+            "serviceId": service_id, "environmentId": env_id,
+        })
+        domains = data.get("serviceInstance") or {}
+        service_domains = (domains.get("domains") or {}).get("serviceDomains", [])
+        if service_domains:
+            d = service_domains[0]["domain"]
+            return f"https://{d}" if not d.startswith("https") else d
+    except Exception as exc:
+        log.debug("[RAILWAY] domain query failed: %s — will create", exc)
+
+    # No domain yet — create one
+    try:
+        data = await _gql(client, token, _M_SERVICE_DOMAIN_CREATE, {
+            "serviceId": service_id, "environmentId": env_id,
+        })
+        d = data["serviceDomainCreate"]["domain"]
+        return f"https://{d}" if not d.startswith("https") else d
+    except Exception as exc:
+        log.warning("[RAILWAY] Could not create domain: %s", exc)
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Tarball — dist/ + Dockerfile + nginx.conf only
+# ---------------------------------------------------------------------------
+
+def _add_str(tar: tarfile_mod.TarFile, name: str, content: str) -> None:
+    """Add an in-memory string as a file into the tarball."""
+    data = content.encode("utf-8")
+    info = tarfile_mod.TarInfo(name=name)
+    info.size = len(data)
+    info.mode = 0o644
+    tar.addfile(info, io.BytesIO(data))
+
 
 def _make_tarball(build_dir: Path) -> bytes:
     """
-    Pack build_dir into an in-memory .tar.gz, excluding node_modules and other
-    large directories that Railway doesn't need to receive.
+    Build a minimal tarball: dist/ assets + Dockerfile + nginx.conf.
+
+    Railway detects the Dockerfile and uses Docker instead of Nixpacks.
+    The nginx image serves the pre-built SPA on port 8080 with SPA routing.
+
+    Falls back to packaging full source (for Nixpacks) if dist/ is missing —
+    but deployment will likely fail without a start script.
     """
+    dist_dir = build_dir / "dist"
+
     buf = io.BytesIO()
     with tarfile_mod.open(fileobj=buf, mode="w:gz") as tar:
-        for file_path in sorted(build_dir.rglob("*")):
-            if not file_path.is_file():
-                continue
-            # Skip any path that contains an excluded directory name
-            parts = file_path.relative_to(build_dir).parts
-            if any(part in _EXCLUDE_DIRS for part in parts):
-                continue
-            tar.add(str(file_path), arcname=str(file_path.relative_to(build_dir)))
-    return buf.getvalue()
+        # Always include Dockerfile + nginx.conf so Railway uses Docker
+        _add_str(tar, "Dockerfile", _DOCKERFILE)
+        _add_str(tar, "nginx.conf", _NGINX_CONF)
+
+        if dist_dir.is_dir():
+            # Primary path: copy only pre-built assets
+            for f in sorted(dist_dir.rglob("*")):
+                if f.is_file():
+                    arcname = "dist/" + f.relative_to(dist_dir).as_posix()
+                    tar.add(str(f), arcname=arcname)
+            log.info("[RAILWAY] Tarball: Dockerfile + nginx.conf + dist/ (%d files)",
+                     sum(1 for f in dist_dir.rglob("*") if f.is_file()))
+        else:
+            # Fallback: include source so Railway can attempt a Nixpacks build.
+            # Deployment may fail if no `start` script exists in package.json.
+            log.warning(
+                "[RAILWAY] dist/ not found in %s — falling back to source upload. "
+                "Run vite build first for reliable deployment.", build_dir
+            )
+            for f in sorted(build_dir.rglob("*")):
+                if not f.is_file():
+                    continue
+                parts = f.relative_to(build_dir).parts
+                if any(p in _EXCLUDE_DIRS for p in parts):
+                    continue
+                tar.add(str(f), arcname=str(f.relative_to(build_dir)))
+
+    result = buf.getvalue()
+    log.info("[RAILWAY] Tarball total size: %.1f KB", len(result) / 1024)
+    return result
 
 
 # ---------------------------------------------------------------------------
-# Internal — Upload + Deploy
+# Upload + Deploy
 # ---------------------------------------------------------------------------
+
+# Railway's REST upload endpoint.
+# Introspection of Railway's GraphQL schema confirmed there is NO GraphQL mutation
+# for source uploads (sourceUploadCreate does not exist — 182 mutations checked).
+# The upload is a REST multipart POST that follows the graphql-multipart-request-spec
+# field ordering: map field MUST precede the file field.
+_UPLOAD_URL = "https://backboard.railway.app/deployments/uploads"
+
 
 async def _upload_tarball(
     client: httpx.AsyncClient,
     token: str,
     tarball: bytes,
 ) -> str:
-    """POST tarball to Railway's upload endpoint. Returns uploadId."""
+    """
+    Upload tarball to Railway's REST upload endpoint.
+
+    The endpoint uses graphql-multipart-request-spec field ordering:
+      1. 'map' field (JSON) — must come first
+      2. file field named by the map key
+
+    Previous failed attempts:
+      - Sending only the file field → HTTP 400 "Misordered multipart fields;
+        files should follow 'map'"  (missing the map field)
+      - Using sourceUploadCreate GraphQL mutation → HTTP 400 "Cannot query field
+        sourceUploadCreate on type Mutation"  (that mutation does not exist)
+
+    httpx sends data= dict before files= dict in multipart, so map comes before file.
+    """
+    import json as _json
+
     resp = await client.post(
         _UPLOAD_URL,
-        files={"file": ("source.tar.gz", tarball, "application/gzip")},
+        data={"map": _json.dumps({"0": ["variables.file"]})},
+        files={"0": ("source.tar.gz", tarball, "application/gzip")},
         headers={"Authorization": f"Bearer {token}"},
-        timeout=120.0,
-        verify=_ssl_verify(),
+        timeout=180.0,
     )
     if not resp.is_success:
         raise RuntimeError(
-            f"Railway upload HTTP {resp.status_code} — {resp.text[:400]}"
+            f"Railway upload failed HTTP {resp.status_code}: {resp.text[:400]}"
         )
-    data = resp.json()
-    upload_id = data.get("uploadId") or data.get("id", "")
+    body = resp.json()
+    upload_id = body.get("uploadId") or body.get("id") or body.get("data", {}).get("id", "")
     if not upload_id:
-        raise RuntimeError(f"Railway upload returned no uploadId: {data}")
+        raise RuntimeError(f"Railway upload returned no uploadId: {body}")
+    log.info("[RAILWAY] Upload OK — uploadId=%s (%.1f KB)", upload_id[:16], len(tarball) / 1024)
     return upload_id
 
 
+
 _M_CREATE_DEPLOYMENT = """
-mutation CreateDeployment($serviceId: ID!, $environmentId: ID!, $uploadId: ID!) {
+mutation CreateDeployment($serviceId: String!, $environmentId: String!, $uploadId: String!) {
   deploymentCreate(input: {
-    serviceId: $serviceId,
-    environmentId: $environmentId,
-    uploadId: $uploadId
+    serviceId:      $serviceId
+    environmentId:  $environmentId
+    sourceUploadId: $uploadId
   }) { id }
 }
 """
 
 _Q_DEPLOYMENT_STATUS = """
-query DeploymentStatus($id: ID!) {
-  deployment(id: $id) { id status url staticUrl }
+query DeploymentStatus($id: String!) {
+  deployment(id: $id) {
+    id
+    status
+    url
+    staticUrl
+    meta { serviceId environmentId }
+  }
 }
 """
 
@@ -301,7 +548,6 @@ async def _create_deployment(
     env_id: str,
     upload_id: str,
 ) -> str:
-    """Create a Railway deployment from an upload. Returns deployment_id."""
     data = await _gql(client, token, _M_CREATE_DEPLOYMENT, {
         "serviceId":     service_id,
         "environmentId": env_id,
@@ -314,27 +560,65 @@ async def _poll_deployment(
     client: httpx.AsyncClient,
     token: str,
     deployment_id: str,
-) -> str:
+) -> None:
     """
-    Poll deployment status every _POLL_INTERVAL seconds.
-    Returns the live URL on SUCCESS; raises RuntimeError on failure.
+    Poll deployment status until terminal state.
+    Raises RuntimeError on FAILED/CRASHED/REMOVED.
+    Returns normally on SUCCESS.
+
+    Note: we do NOT return a URL here — the URL comes from _ensure_service_domain
+    called before deployment starts. deployment.url is null for Docker/Nixpacks.
     """
     deadline = asyncio.get_event_loop().time() + _DEPLOY_TIMEOUT
-    terminal = {"SUCCESS", "FAILED", "CRASHED", "REMOVED"}
+    # Non-terminal states we keep polling through
+    in_progress = {"INITIALIZING", "BUILDING", "DEPLOYING", "QUEUED", "WAITING", "SLEEPING"}
+    failure_states = {"FAILED", "CRASHED", "REMOVED"}
 
+    prev_status = ""
     while asyncio.get_event_loop().time() < deadline:
-        data   = await _gql(client, token, _Q_DEPLOYMENT_STATUS, {"id": deployment_id})
-        dep    = data["deployment"]
-        status = dep["status"]
-        log.info("[RAILWAY] Deployment %s | status=%s", deployment_id[:8], status)
+        try:
+            data   = await _gql(client, token, _Q_DEPLOYMENT_STATUS, {"id": deployment_id})
+            dep    = data.get("deployment") or {}
+            status = dep.get("status", "UNKNOWN")
+        except Exception as exc:
+            log.warning("[RAILWAY] Poll query failed: %s — retrying", exc)
+            await asyncio.sleep(_POLL_INTERVAL)
+            continue
+
+        if status != prev_status:
+            log.info("[RAILWAY] deployment=%s status=%s", deployment_id[:12], status)
+            prev_status = status
 
         if status == "SUCCESS":
-            return dep.get("url") or dep.get("staticUrl") or ""
-        if status in terminal:
-            raise RuntimeError(f"Deployment {deployment_id[:8]} ended with status={status}")
+            return
+
+        if status in failure_states:
+            raise RuntimeError(
+                f"Railway deployment {deployment_id[:12]} ended with status={status}. "
+                "Check Railway dashboard for build logs."
+            )
+
+        if status not in in_progress:
+            log.warning("[RAILWAY] Unknown deployment status: %s — continuing to poll", status)
 
         await asyncio.sleep(_POLL_INTERVAL)
 
     raise RuntimeError(
-        f"Deployment {deployment_id[:8]} timed out after {_DEPLOY_TIMEOUT}s"
+        f"Railway deployment {deployment_id[:12]} timed out after {_DEPLOY_TIMEOUT}s. "
+        "The container may still be starting — check Railway dashboard."
     )
+
+
+# ---------------------------------------------------------------------------
+# Utility
+# ---------------------------------------------------------------------------
+
+def _unwrap_edges(connection: dict) -> list[dict]:
+    return [e["node"] for e in connection.get("edges", []) if "node" in e]
+
+
+def _pick_prod_env(envs: list[dict]) -> str:
+    for e in envs:
+        if e.get("name", "").lower() in ("production", "prod"):
+            return e["id"]
+    return envs[0]["id"] if envs else ""

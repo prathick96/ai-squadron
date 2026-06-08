@@ -2,7 +2,7 @@
 packages/agents/product/marketing_seo.py
 Marketing & SEO Agent (Product) — post-launch growth for SaaS products.
 
-Model:   gemini-2.0-flash
+Model:   claude-haiku-4-5-20251001
 Input:   deployment_receipt, venture_brief, tech_spec
 Output:  marketing_plan with SEO targets, copy, and distribution channels
 

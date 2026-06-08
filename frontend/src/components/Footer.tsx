@@ -56,7 +56,7 @@ export default function Footer() {
             </p>
             <p style={{ color: '#475569', fontSize: 12, marginTop: 16 }}>
               Payments secured by{' '}
-              <a href="https://paddle.com" target="_blank" rel="noreferrer" style={{ color: '#7c3aed', textDecoration: 'none' }}>
+              <a href="https://razorpay.com" target="_blank" rel="noreferrer" style={{ color: '#7c3aed', textDecoration: 'none' }}>
                 Paddle
               </a>
             </p>
@@ -99,7 +99,7 @@ export default function Footer() {
             © {new Date().getFullYear()} AI Squadron. All rights reserved.
           </p>
           <p style={{ color: '#334155', fontSize: 12 }}>
-            Built with AI · Governed by Indian law · Payments via Paddle (MoR)
+            Built with AI · Governed by Indian law · Payments via Razorpay (MoR)
           </p>
         </div>
       </div>

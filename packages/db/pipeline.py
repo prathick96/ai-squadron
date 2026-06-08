@@ -13,24 +13,28 @@ from packages.db.client import get_db, is_supabase_connected, store_event
 log = logging.getLogger(__name__)
 
 
-def begin_pipeline_run(run_id: str, venture_id: str, department: str = "PRODUCT") -> None:
+def begin_pipeline_run(
+    run_id: str, venture_id: str, department: str = "PRODUCT",
+    user_id: str | None = None,
+) -> None:
     if not is_supabase_connected():
         return
-    db = get_db()
+    db  = get_db()
     row = {
-        "run_id": run_id,
-        "venture_id": venture_id,
-        "pipeline_stage": "RESEARCH_NODE",
-        "status": "RUNNING",
-        "qa_retry_count": 0,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "department": department,
+        "run_id":        run_id,
+        "venture_id":    venture_id,
+        "pipeline_stage":"RESEARCH_NODE",
+        "status":        "RUNNING",
+        "qa_retry_count":0,
+        "started_at":    datetime.now(timezone.utc).isoformat(),
+        "department":    department,
+        "user_id":       user_id,   # associates this run with a customer (None = admin)
     }
     try:
         db.table("pipeline_runs").upsert(row, on_conflict="run_id").execute()
     except TypeError:
         db.table("pipeline_runs").upsert(row).execute()
-    log.debug("[pipeline] RUNNING run_id=%s dept=%s", run_id, department)
+    log.debug("[pipeline] RUNNING run_id=%s dept=%s user=%s", run_id, department, user_id)
 
 
 def update_pipeline_stage(run_id: str, venture_id: str, stage: str, qa_retry_count: int = 0) -> None:
@@ -378,3 +382,26 @@ def persist_niche_evaluation(
                  niche, sum(scores.values()), go_decision)
     except Exception as exc:
         log.debug("[pipeline] persist_niche_evaluation failed: %s", exc)
+
+
+def get_build_path_for_venture(venture_id: str) -> str | None:
+    """
+    Return the filesystem build path for a venture, checking:
+    1. /tmp/squadron-builds/{venture_id}/ (live disk — fastest)
+    2. build_artifacts table in Supabase (survives Railway restarts)
+    """
+    import os
+    from pathlib import Path
+
+    builds_root = Path(os.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
+    disk_path = builds_root / venture_id
+    if disk_path.is_dir():
+        return str(disk_path)
+
+    artifact = fetch_build_artifact(venture_id)
+    if artifact:
+        stored = artifact.get("build_path", "")
+        if stored and Path(stored).is_dir():
+            return stored
+
+    return None

@@ -2,7 +2,7 @@
 packages/agents/product/product_growth.py
 Product Growth Agent — MRR tracking and scale/kill decisions.
 
-Model:   gemini-2.0-flash
+Model:   claude-haiku-4-5-20251001
 Input:   deployment_receipt, channel_analytics, venture_brief
 Output:  growth_report with MRR trajectory and SCALE/MAINTAIN/KILL signal
 

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+import time as _time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,6 +60,20 @@ async def lifespan(app: FastAPI):
             log.info("Revenue Engine scheduler started (daily 00:00 UTC + Monday 08:00 UTC)")
         except ImportError:
             log.warning("APScheduler not installed — revenue scheduler not started")
+    # Pre-warm the in-memory cache so the first Command Center load is instant.
+    # Uses mock data — the real Supabase data populates on the first 60s TTL expiry.
+    async def _prewarm():
+        await asyncio.sleep(3)   # let DB pool settle first
+        try:
+            _cached("agents",       _CACHE_TTL, lambda: {"agents": agent_grid(),      "source": "mock"})
+            _cached("revenue",      _CACHE_TTL, lambda: {**revenue_summary(),         "source": "mock"})
+            _cached("trends",       _CACHE_TTL, trend_heatmap)
+            _cached("security",     _CACHE_TTL, lambda: {"alerts": security_alerts()})
+            _cached("revenue_plan", _CACHE_TTL, revenue_plan)
+            log.info("[PREWARM] Cache warm — Command Center first load is now instant")
+        except Exception as exc:
+            log.debug("[PREWARM] skipped: %s", exc)
+    asyncio.create_task(_prewarm())
     yield
     if scheduler:
         scheduler.shutdown()
@@ -91,7 +106,7 @@ class ReviewResolveBody(BaseModel):
 
 
 class PipelineRunBody(BaseModel):
-    department: Literal["PRODUCT", "MEDIA", "AUTO"] = "AUTO"
+    department: Literal["PRODUCT"] = "PRODUCT"  # Media archived — only PRODUCT
     venture_id: str | None = None
 
 
@@ -99,7 +114,7 @@ class LedgerEntryBody(BaseModel):
     venture_id: str
     period_start: str  # YYYY-MM-DD
     period_end: str    # YYYY-MM-DD
-    revenue_source: Literal["STRIPE", "ADSENSE", "MANUAL"]
+    revenue_source: Literal["RAZORPAY", "ADSENSE", "MANUAL"]
     amount_usd: float
     burn_usd: float = 0.0
     notes: str = ""
@@ -125,7 +140,7 @@ def _run_to_dict(rec: RunRecord) -> dict:
     }
 
 
-async def _run_pipeline_background(state: dict, department: str) -> None:
+async def _run_pipeline_background(state: dict, department: str, user_id: str | None = None) -> None:
     """Background task: stream the full pipeline and push updates to the registry."""
     from apps.orchestrator.graph import build_squadron_graph
     from packages.db.client import upsert_venture
@@ -148,7 +163,7 @@ async def _run_pipeline_background(state: dict, department: str) -> None:
     final_state: dict = dict(state)
 
     try:
-        begin_pipeline_run(run_id, venture_id, department)
+        begin_pipeline_run(run_id, venture_id, department, user_id=user_id)
         graph = build_squadron_graph(department)
 
         # Stream node-by-node: each chunk is {node_name: state_updates}
@@ -183,18 +198,51 @@ async def _run_pipeline_background(state: dict, department: str) -> None:
 
 
 def _try_supabase_agents() -> list[dict] | None:
+    """
+    Build the agent health grid with REAL success_ratio computed server-side.
+
+    The NaN% bug: the frontend received `success_ratio: undefined` because the
+    raw agent_logs rows don't have an aggregated ratio field.  We now compute it
+    here: for each agent, count SUCCESS vs total over the last 20 runs.
+    """
     try:
         from packages.db.pipeline import fetch_recent_agent_logs
-        rows = fetch_recent_agent_logs(50)
+        rows = fetch_recent_agent_logs(200)   # more rows so we can compute ratios
         if not rows:
             return None
-        # Rows are ordered newest-first; keep only the most recent entry per agent_name.
-        seen: dict[str, dict] = {}
+
+        # Aggregate per agent_name over the last 20 runs each
+        from collections import defaultdict
+        agent_runs: dict[str, list[str]] = defaultdict(list)
+        agent_latest: dict[str, dict]    = {}
+
         for row in rows:
-            name = row.get("agent_name", "")
-            if name and name not in seen:
-                seen[name] = row
-        return list(seen.values()) if seen else None
+            name   = row.get("agent_name", "")
+            status = row.get("status", "")
+            if not name:
+                continue
+            if name not in agent_latest:
+                agent_latest[name] = row   # newest row first
+            if len(agent_runs[name]) < 20:
+                agent_runs[name].append(status)
+
+        result = []
+        for name, latest in agent_latest.items():
+            statuses     = agent_runs[name]
+            total        = len(statuses)
+            successes    = sum(1 for s in statuses if s == "SUCCESS")
+            ratio        = round(successes / total, 3) if total > 0 else 0.0
+
+            result.append({
+                **latest,
+                "success_ratio":  ratio,        # 0.0–1.0  — frontend multiplies by 100
+                "tokens_used":    latest.get("tokens_used", 0) or 0,
+                "latency_ms":     latest.get("latency_ms", 0)  or 0,
+                "retry_count":    latest.get("retry_count", 0) or 0,
+                "current_task":   latest.get("current_task", "") or "",
+            })
+
+        return result or None
     except Exception as exc:
         log.debug("Supabase agent_logs unavailable: %s", exc)
     return None
@@ -202,7 +250,7 @@ def _try_supabase_agents() -> list[dict] | None:
 
 def _portfolio_from_supabase() -> dict | None:
     from packages.db.pipeline import fetch_ventures_for_portfolio
-    all_ventures = fetch_ventures_for_portfolio(450)
+    all_ventures = fetch_ventures_for_portfolio(50)
     if not all_ventures:
         return None
     ventures = [v for v in all_ventures if v.get("status") != "KILLED"]
@@ -215,7 +263,9 @@ def _portfolio_from_supabase() -> dict | None:
             "niche": v.get("niche", ""),
             "mrr_usd": 0.0,
         })
-    while len(slots) < 450:
+    # Show live ventures + 10 empty slots max (previously padded to 450 — too slow)
+    target = max(10, len(slots) + 10)
+    while len(slots) < target:
         slots.append({
             "slot": len(slots) + 1,
             "venture_id": None,
@@ -235,6 +285,27 @@ def _revenue_payload() -> tuple[dict, str]:
 
 
 # ---------------------------------------------------------------------------
+# Simple TTL cache — avoids hammering Supabase on every 8s poll tick.
+# Heavy endpoints (confidence, portfolio, trends) are cached for 30 seconds.
+# The registry (live runs) is never cached — it's in-memory and instant.
+# ---------------------------------------------------------------------------
+_cache: dict[str, tuple[float, object]] = {}
+_CACHE_TTL = 60.0   # seconds — raised from 30s; agents/revenue now also cached
+
+
+def _cached(key: str, ttl: float, fn):
+    """Return cached value or recompute. Thread-safe via GIL for CPython."""
+    now = _time.monotonic()
+    if key in _cache:
+        ts, val = _cache[key]
+        if now - ts < ttl:
+            return val
+    val = fn()
+    _cache[key] = (now, val)
+    return val
+
+
+# ---------------------------------------------------------------------------
 # Dashboard endpoints (unchanged from Week 4)
 # ---------------------------------------------------------------------------
 
@@ -244,6 +315,7 @@ def _railway_ok() -> bool:
         return railway_available()
     except Exception:
         return False
+
 
 
 @app.get("/api/health")
@@ -271,50 +343,57 @@ def health() -> dict:
 
 @app.get("/api/agents")
 def get_agents() -> dict:
-    from packages.db.client import is_supabase_connected
-    live = _try_supabase_agents()
-    if live:
-        return {"agents": live, "source": "supabase"}
-    # Supabase connected but agent_logs is empty (no pipeline runs yet)
-    source = "supabase_empty" if is_supabase_connected() else "mock"
-    return {"agents": agent_grid(), "source": source}
+    def _compute():
+        from packages.db.client import is_supabase_connected
+        live = _try_supabase_agents()
+        if live:
+            return {"agents": live, "source": "supabase"}
+        source = "supabase_empty" if is_supabase_connected() else "mock"
+        return {"agents": agent_grid(), "source": source}
+    return _cached("agents", _CACHE_TTL, _compute)
 
 
 @app.get("/api/revenue")
 def get_revenue() -> dict:
-    try:
-        payload, source = _revenue_payload()
-        return {**payload, "source": source}
-    except Exception as exc:
-        log.warning("[API] /api/revenue failed (%s) — returning mock", exc)
-        return {**revenue_summary(), "source": "mock"}
+    def _compute():
+        try:
+            payload, source = _revenue_payload()
+            return {**payload, "source": source}
+        except Exception as exc:
+            log.warning("[API] /api/revenue failed (%s) — returning mock", exc)
+            return {**revenue_summary(), "source": "mock"}
+    return _cached("revenue", _CACHE_TTL, _compute)
 
 
 @app.get("/api/revenue/plan")
 def get_revenue_plan() -> dict:
-    try:
-        return live_revenue_plan()
-    except Exception:
-        return revenue_plan()
+    def _compute():
+        try:
+            return live_revenue_plan()
+        except Exception:
+            return revenue_plan()
+    return _cached("revenue_plan", _CACHE_TTL, _compute)
 
 
 @app.get("/api/confidence")
 def get_confidence() -> dict:
-    try:
-        report = live_confidence()
-        return {**report, "source": "computed"}
-    except Exception as exc:
-        log.warning("confidence fallback: %s", exc)
-        return {
-            "confidence_score": 0,
-            "confidence_tier": "LOW",
-            "forecast_p10_mrr_12mo": 0,
-            "forecast_p50_mrr_12mo": 300,
-            "forecast_p90_mrr_12mo": 3000,
-            "leading_indicators": {},
-            "recommended_actions": ["Run: python apps/revenue-engine/main.py --mode once"],
-            "source": "fallback",
-        }
+    def _compute():
+        try:
+            report = live_confidence()
+            return {**report, "source": "computed"}
+        except Exception as exc:
+            log.warning("confidence fallback: %s", exc)
+            return {
+                "confidence_score": 0,
+                "confidence_tier": "LOW",
+                "forecast_p10_mrr_12mo": 0,
+                "forecast_p50_mrr_12mo": 300,
+                "forecast_p90_mrr_12mo": 3000,
+                "leading_indicators": {},
+                "recommended_actions": ["Run: python apps/revenue-engine/main.py --mode once"],
+                "source": "fallback",
+            }
+    return _cached("confidence", _CACHE_TTL, _compute)
 
 
 @app.get("/api/scorecards")
@@ -372,6 +451,143 @@ def add_ledger_entry(body: LedgerEntryBody) -> dict:
     }
     upsert_ledger_row(row)
     return {"ok": True, "entry": row}
+
+
+# ---------------------------------------------------------------------------
+# Customer user API — profile, ventures, plan enforcement
+# ---------------------------------------------------------------------------
+
+_PLAN_RUN_LIMITS = {"starter": 1, "builder": 10, "studio": -1}  # -1 = unlimited
+
+
+def _get_user_profile(user_id: str) -> dict | None:
+    """Fetch user_profiles row for this Supabase auth user."""
+    from packages.db.client import get_db, is_supabase_connected
+    if not is_supabase_connected():
+        return None
+    try:
+        result = get_db().table("user_profiles").select("*").eq("id", user_id).single().execute()
+        return result.data
+    except Exception:
+        return None
+
+
+def _count_user_runs_this_month(user_id: str) -> int:
+    """Count non-failed pipeline runs for this user in the current calendar month."""
+    from packages.db.client import get_db, is_supabase_connected
+    from datetime import date
+    if not is_supabase_connected():
+        return 0
+    try:
+        month_start = date.today().replace(day=1).isoformat()
+        result = get_db() \
+            .table("pipeline_runs") \
+            .select("run_id", count="exact") \
+            .eq("user_id", user_id) \
+            .gte("started_at", month_start) \
+            .neq("status", "FAILED") \
+            .execute()
+        return result.count or 0
+    except Exception:
+        return 0
+
+
+@app.get("/api/user/profile")
+def get_user_profile(request: Request) -> dict:
+    """
+    Return the authenticated customer's plan, run usage, and venture summary.
+    Reads the Supabase JWT from the Authorization header.
+    """
+    from supabase import create_client
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Authorization header required")
+
+    jwt = auth_header[7:]
+
+    # Verify JWT and get user_id from Supabase
+    try:
+        import os as _os
+        supa = create_client(
+            _os.getenv("SUPABASE_URL", ""),
+            _os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""),
+        )
+        user_resp = supa.auth.get_user(jwt)
+        user_id   = user_resp.user.id
+        user_email = user_resp.user.email or ""
+    except Exception as exc:
+        raise HTTPException(401, f"Invalid session: {exc}")
+
+    profile = _get_user_profile(user_id)
+    plan    = (profile or {}).get("plan", "starter")
+    limit   = _PLAN_RUN_LIMITS.get(plan, 1)
+    used    = _count_user_runs_this_month(user_id)
+
+    return {
+        "user_id":           user_id,
+        "email":             user_email,
+        "plan":              plan,
+        "runs_used":         used,
+        "runs_limit":        limit,
+        "runs_remaining":    max(0, limit - used) if limit != -1 else -1,
+        "unlimited":         limit == -1,
+        "onboarding_done":   (profile or {}).get("onboarding_done", False),
+    }
+
+
+@app.get("/api/user/ventures")
+def get_user_ventures(request: Request) -> dict:
+    """
+    Return this user's pipeline runs (their ventures) with live_url if deployed.
+    """
+    import os as _os
+    from supabase import create_client
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Authorization header required")
+
+    jwt = auth_header[7:]
+    try:
+        supa      = create_client(_os.getenv("SUPABASE_URL", ""), _os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
+        user_resp = supa.auth.get_user(jwt)
+        user_id   = user_resp.user.id
+    except Exception as exc:
+        raise HTTPException(401, f"Invalid session: {exc}")
+
+    from packages.db.client import get_db, is_supabase_connected
+    if not is_supabase_connected():
+        return {"ventures": [], "count": 0}
+
+    try:
+        runs = get_db() \
+            .table("pipeline_runs") \
+            .select("run_id,venture_id,status,current_stage,started_at,completed_at,department") \
+            .eq("user_id", user_id) \
+            .order("started_at", desc=True) \
+            .limit(20) \
+            .execute()
+
+        ventures = []
+        for r in (runs.data or []):
+            vid = r.get("venture_id", "")
+            # Fetch live_url from ventures table
+            v_res = get_db().table("ventures").select("niche,live_url,status,venture_type") \
+                .eq("venture_id", vid).execute()
+            v_data = (v_res.data or [{}])[0]
+            ventures.append({
+                **r,
+                "niche":        v_data.get("niche", ""),
+                "live_url":     v_data.get("live_url"),
+                "venture_status": v_data.get("status", ""),
+                "venture_type": v_data.get("venture_type", "MICRO_SAAS"),
+            })
+
+        return {"ventures": ventures, "count": len(ventures)}
+    except Exception as exc:
+        log.warning("[USER_VENTURES] failed: %s", exc)
+        return {"ventures": [], "count": 0}
 
 
 @app.get("/api/ventures")
@@ -567,84 +783,168 @@ def download_build(venture_id: str):
     )
 
 
-@app.post("/api/webhooks/paddle")
-async def paddle_webhook(request: Request) -> dict:
+# ─── Razorpay payment endpoints ───────────────────────────────────────────────
+
+class _CreateSubscriptionRequest(BaseModel):
+    plan_key: str   # e.g. "builder_monthly", "studio_annual"
+    user_id:  str = ""
+    email:    str = ""
+
+
+@app.post("/api/payments/create-subscription")
+async def create_razorpay_subscription(req: _CreateSubscriptionRequest) -> dict:
     """
-    Paddle webhook handler — updates user_subscriptions when Paddle fires events.
-    Events handled: subscription.created, subscription.updated, subscription.cancelled.
+    Create a Razorpay subscription slot and return key_id + subscription_id.
 
-    Set in Paddle Dashboard → Notifications → add endpoint:
-      https://ai-squadron-production.up.railway.app/api/webhooks/paddle
+    The frontend opens the Razorpay checkout modal with these values.
+    After payment the user's handler POSTs the response to /api/payments/verify.
+
+    Required Railway vars: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET,
+                           RAZORPAY_PLAN_<PLAN_KEY> (one per plan)
     """
-    import json as _json
-    import hmac
-    import hashlib
+    from packages.tools.razorpay_client import create_subscription, razorpay_available
 
-    body = await request.body()
-    paddle_sig = request.headers.get("Paddle-Signature", "")
-    secret     = os.getenv("PADDLE_WEBHOOK_SECRET", "")
+    if not razorpay_available():
+        raise HTTPException(503, "RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET not configured")
 
-    # Verify signature when secret is set
-    if secret and paddle_sig:
-        ts_part, h1_part = "", ""
-        for part in paddle_sig.split(";"):
-            if part.startswith("ts="):
-                ts_part = part[3:]
-            elif part.startswith("h1="):
-                h1_part = part[3:]
-        signed  = f"{ts_part}:{body.decode()}"
-        expected = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected, h1_part):
-            raise HTTPException(401, "Invalid Paddle signature")
+    allowed_plans = {
+        "builder_monthly", "builder_annual", "studio_monthly", "studio_annual",
+    }
+    if req.plan_key not in allowed_plans:
+        raise HTTPException(400, f"Unknown plan_key '{req.plan_key}'. "
+                                 f"Choose from: {sorted(allowed_plans)}")
 
     try:
-        payload  = _json.loads(body)
-        evt_type = payload.get("event_type", "")
-        data     = payload.get("data", {})
-
-        if evt_type in ("subscription.created", "subscription.updated"):
-            _upsert_subscription(data)
-        elif evt_type == "subscription.cancelled":
-            _cancel_subscription(data)
-
-        return {"ok": True, "event_type": evt_type}
+        result = create_subscription(
+            plan_key=req.plan_key,
+            user_id=req.user_id or "anon",
+            user_email=req.email or "",
+        )
+        return {
+            "key_id":          os.getenv("RAZORPAY_KEY_ID", ""),
+            "subscription_id": result["subscription_id"],
+            "plan_key":        req.plan_key,
+        }
     except Exception as exc:
-        log.exception("[WEBHOOK] Paddle webhook error: %s", exc)
+        log.exception("[PAYMENTS] create-subscription failed: %s", exc)
+        raise HTTPException(500, f"Subscription creation failed: {exc}")
+
+
+class _VerifyPaymentRequest(BaseModel):
+    razorpay_payment_id:      str
+    razorpay_subscription_id: str
+    razorpay_signature:       str
+
+
+@app.post("/api/payments/verify")
+async def verify_razorpay_payment(req: _VerifyPaymentRequest) -> dict:
+    """
+    Verify Razorpay payment signature and mark subscription active in Supabase.
+
+    Called by the frontend after the Razorpay checkout modal fires the handler.
+    Only marks the subscription active if the HMAC-SHA256 signature matches.
+    """
+    from packages.tools.razorpay_client import verify_payment_signature, fetch_subscription
+
+    try:
+        valid = verify_payment_signature(
+            req.razorpay_payment_id,
+            req.razorpay_subscription_id,
+            req.razorpay_signature,
+        )
+    except EnvironmentError as exc:
+        raise HTTPException(503, str(exc))
+
+    if not valid:
+        log.warning("[PAYMENTS] Invalid Razorpay signature for sub=%s", req.razorpay_subscription_id)
+        raise HTTPException(400, "Invalid payment signature — possible tampering")
+
+    # Fetch subscription details to get user_id from notes
+    try:
+        sub = fetch_subscription(req.razorpay_subscription_id)
+        notes = sub.get("notes") or {}
+        user_id  = notes.get("user_id", "")
+        plan_key = notes.get("plan_key", "")
+        plan     = plan_key.split("_")[0] if plan_key else "builder"
+        _upsert_razorpay_subscription(req.razorpay_subscription_id, user_id, plan, sub)
+    except Exception as exc:
+        log.warning("[PAYMENTS] DB upsert failed (non-blocking): %s", exc)
+
+    log.info("[PAYMENTS] Payment verified: sub=%s", req.razorpay_subscription_id[:12])
+    return {"ok": True, "subscription_id": req.razorpay_subscription_id}
+
+
+@app.post("/api/webhooks/razorpay")
+async def razorpay_webhook(request: Request) -> dict:
+    """
+    Razorpay webhook handler — updates user_subscriptions on subscription events.
+
+    Events handled: subscription.charged, subscription.cancelled, payment.failed
+
+    Set in Razorpay Dashboard → Webhooks → Add New Webhook:
+      URL:    https://your-app.up.railway.app/api/webhooks/razorpay
+      Events: subscription.charged, subscription.cancelled, payment.failed
+      Secret: set RAZORPAY_WEBHOOK_SECRET in Railway env vars
+
+    Razorpay sends X-Razorpay-Signature header with HMAC-SHA256 of the body.
+    """
+    import json as _json
+
+    body      = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+
+    from packages.tools.razorpay_client import verify_webhook_signature
+    if not verify_webhook_signature(body, signature):
+        raise HTTPException(401, "Invalid Razorpay webhook signature")
+
+    try:
+        payload   = _json.loads(body)
+        evt_type  = payload.get("event", "")
+        entity    = payload.get("payload", {})
+
+        sub_entity = entity.get("subscription", {}).get("entity", {})
+        sub_id     = sub_entity.get("id", "")
+        notes      = sub_entity.get("notes") or {}
+        user_id    = notes.get("user_id", "")
+        plan_key   = notes.get("plan_key", "")
+        plan       = plan_key.split("_")[0] if plan_key else "builder"
+
+        if evt_type == "subscription.charged":
+            _upsert_razorpay_subscription(sub_id, user_id, plan, sub_entity)
+        elif evt_type == "subscription.cancelled":
+            _cancel_razorpay_subscription(sub_id)
+        elif evt_type == "payment.failed":
+            log.warning("[WEBHOOK] payment.failed for sub=%s user=%s", sub_id[:12], user_id[:8])
+
+        return {"ok": True, "event": evt_type}
+    except Exception as exc:
+        log.exception("[WEBHOOK] Razorpay webhook error: %s", exc)
         raise HTTPException(500, str(exc))
 
 
-def _upsert_subscription(data: dict) -> None:
+def _upsert_razorpay_subscription(
+    sub_id: str, user_id: str, plan: str, sub: dict,
+) -> None:
     from packages.db.client import get_db, is_supabase_connected
-    if not is_supabase_connected():
+    if not is_supabase_connected() or not user_id:
         return
     db = get_db()
-    custom = data.get("custom_data") or {}
-    user_id = custom.get("user_id")  # set this when creating Paddle checkout
-    if not user_id:
-        return
-    plan = custom.get("plan", "builder")
-    items = data.get("items", [])
-    price_id = items[0]["price"]["id"] if items else None
-    billing   = (items[0].get("price", {}).get("billing_cycle", {}).get("interval", "month")) if items else "month"
     try:
         db.table("user_subscriptions").upsert({
-            "user_id":               user_id,
-            "paddle_subscription_id": data.get("id"),
-            "paddle_customer_id":    data.get("customer_id"),
-            "plan":                  plan,
-            "status":                data.get("status", "active"),
-            "price_id":              price_id,
-            "billing_interval":      billing,
-            "current_period_end":    data.get("current_billing_period", {}).get("ends_at"),
-            "cancel_at_period_end":  data.get("scheduled_change", {}).get("action") == "cancel",
-        }, on_conflict="paddle_subscription_id").execute()
-        # Update the user's plan in their profile
+            "user_id":                  user_id,
+            "razorpay_subscription_id": sub_id,
+            "plan":                     plan,
+            "status":                   sub.get("status", "active"),
+            "billing_interval":         sub.get("plan_id", ""),
+            "current_period_end":       sub.get("current_end"),
+            "cancel_at_period_end":     sub.get("cancel_at_cycle_end", False),
+        }, on_conflict="razorpay_subscription_id").execute()
         db.table("user_profiles").update({"plan": plan}).eq("id", user_id).execute()
     except Exception as exc:
-        log.warning("[WEBHOOK] upsert_subscription failed: %s", exc)
+        log.warning("[WEBHOOK] _upsert_razorpay_subscription failed: %s", exc)
 
 
-def _cancel_subscription(data: dict) -> None:
+def _cancel_razorpay_subscription(sub_id: str) -> None:
     from packages.db.client import get_db, is_supabase_connected
     if not is_supabase_connected():
         return
@@ -653,39 +953,82 @@ def _cancel_subscription(data: dict) -> None:
         db.table("user_subscriptions").update({
             "status": "cancelled",
             "cancel_at_period_end": True,
-        }).eq("paddle_subscription_id", data.get("id")).execute()
+        }).eq("razorpay_subscription_id", sub_id).execute()
     except Exception as exc:
-        log.warning("[WEBHOOK] cancel_subscription failed: %s", exc)
+        log.warning("[WEBHOOK] _cancel_razorpay_subscription failed: %s", exc)
+
+
+@app.post("/api/pipeline/{run_id}/proceed")
+async def proceed_pipeline(run_id: str) -> dict:
+    """
+    Override a MANUAL_REVIEW gate and proceed to deployment.
+
+    When QA/Security/Legal blocks a pipeline (MANUAL_REVIEW), the operator can
+    acknowledge the issue and force-deploy the built SaaS anyway.
+    This calls the deploy endpoint directly, bypassing the stuck gate.
+    """
+    rec = registry.get(run_id)
+    if rec is None:
+        raise HTTPException(404, f"Run {run_id} not found in registry")
+    if rec.status not in ("MANUAL_REVIEW", "COMPLETED", "FAILED"):
+        raise HTTPException(409, f"Run {run_id} is currently {rec.status} — cannot proceed")
+
+    venture_id = rec.venture_id
+    log.info("[PROCEED] operator override | run=%s venture=%s", run_id, venture_id)
+
+    from packages.tools.railway_client import deploy_to_railway, railway_available
+    from packages.db.pipeline import get_build_path_for_venture
+
+    if not railway_available():
+        raise HTTPException(503, "RAILWAY_TOKEN not configured — cannot deploy")
+
+    # Find the build path for this venture
+    build_path = get_build_path_for_venture(venture_id)
+    if not build_path:
+        raise HTTPException(404, f"No build found for {venture_id} — engineering must run first")
+
+    from pathlib import Path
+    try:
+        url = await deploy_to_railway(venture_id, Path(build_path))
+    except Exception as exc:
+        raise HTTPException(500, f"Deploy failed: {exc}")
+
+    # Update venture status to LIVE
+    try:
+        from packages.db.client import get_db, is_supabase_connected
+        if is_supabase_connected():
+            get_db().table("ventures").update({
+                "live_url": url, "status": "LIVE",
+            }).eq("venture_id", venture_id).execute()
+    except Exception:
+        pass
+
+    registry.complete(run_id, "DEPLOYMENT_NODE", "COMPLETED", None)
+    log.info("[PROCEED] Deployed via override | venture=%s url=%s", venture_id, url)
+    return {"ok": True, "url": url, "venture_id": venture_id}
 
 
 @app.post("/api/ventures/{venture_id}/deploy")
 async def deploy_venture(venture_id: str) -> dict:
     """
-    Deploy (or redeploy) a venture's built code to Railway.
-    Requires RAILWAY_TOKEN or RAILWAY_API_TOKEN in env.
+    Deploy a venture's pre-built React SPA to Railway.
 
-    Flow:
-      1. Check build files exist on disk (fast path — same deployment)
-      2. If disk is empty, restore from Supabase build_artifacts table
-      3. Call deploy_to_railway() → real HTTPS URL from Railway
-      4. Update ventures.live_url + status='LIVE' in Supabase
-      5. Return {ok, url, venture_id}
+    Packs dist/ + Dockerfile (nginx:alpine) into a tarball and deploys to Railway.
+    A *.up.railway.app domain is auto-created when the service is first deployed.
+
+    Required Railway Variable:
+      RAILWAY_TOKEN = <User Account Token>
+      Get from: railway.app → avatar → Account Settings → Tokens → New Token
+      NOT a Project Token (those cannot create services/domains).
     """
-    from packages.tools.railway_client import deploy_to_railway, railway_available
     from packages.db.pipeline import fetch_build_artifact
+    from packages.tools.railway_client import deploy_to_railway, railway_available
     import os as _os
-
-    if not railway_available():
-        raise HTTPException(
-            400,
-            "RAILWAY_TOKEN (or RAILWAY_API_TOKEN) is not configured. "
-            "Add it in Railway → your service → Variables."
-        )
 
     builds_root = Path(_os.getenv("BUILDS_DIR", "/tmp/squadron-builds"))
     build_dir   = builds_root / venture_id
 
-    # ── Restore from Supabase if disk was wiped by redeploy ────────────────
+    # ── Restore build from Supabase if disk was wiped ──────────────────────
     if not build_dir.is_dir():
         log.info("[DEPLOY] Build not on disk, fetching from Supabase | venture=%s", venture_id)
         artifact = fetch_build_artifact(venture_id)
@@ -693,25 +1036,71 @@ async def deploy_venture(venture_id: str) -> dict:
             raise HTTPException(
                 404,
                 f"No build found for {venture_id}. "
-                "Run a PRODUCT pipeline first to generate the code."
+                "Run a PRODUCT pipeline first."
             )
         build_dir.mkdir(parents=True, exist_ok=True)
-        files_restored = 0
+
+        # Write scaffold files first (package.json, vite.config.ts, tsconfig, etc.)
+        # These are NOT in Supabase — they come from the hardcoded scaffold dict.
+        from packages.agents.product.engineering_team import _SCAFFOLD
+        for rel_path, content in _SCAFFOLD.items():
+            dest = build_dir / rel_path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content, encoding="utf-8")
+        log.info("[DEPLOY] Scaffold files written for %s (%d files)", venture_id, len(_SCAFFOLD))
+
+        # Then restore the LLM-generated source files on top
         for f in artifact["files"]:
             fpath = build_dir / f.get("path", "")
             if fpath.name:
                 fpath.parent.mkdir(parents=True, exist_ok=True)
                 fpath.write_text(f.get("content", ""), encoding="utf-8")
-                files_restored += 1
-        log.info("[DEPLOY] Restored %d files from Supabase for %s", files_restored, venture_id)
+        log.info("[DEPLOY] Restored %d LLM files from Supabase for %s",
+                 len(artifact["files"]), venture_id)
 
-    # ── Deploy to Railway ────────────────────────────────────────────────────
+    # ── Also run npm install + vite build if dist/ is missing ──────────────
+    dist_dir = build_dir / "dist"
+    if not dist_dir.is_dir():
+        import asyncio
+        import sys
+        npm = "npm.cmd" if sys.platform == "win32" else "npm"
+        log.info("[DEPLOY] Building dist/ for %s...", venture_id)
+        try:
+            npm_cache = str(builds_root.parent / ".npm-cache")
+            proc = await asyncio.create_subprocess_exec(
+                npm, "install", "--no-audit", "--no-fund",
+                "--cache", npm_cache, "--legacy-peer-deps",
+                cwd=str(build_dir), stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=300)
+            proc2 = await asyncio.create_subprocess_exec(
+                npm, "run", "build", cwd=str(build_dir),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(proc2.communicate(), timeout=300)
+            if proc2.returncode != 0:
+                raise RuntimeError(f"vite build failed: {stderr.decode(errors='replace')[-300:]}")
+            log.info("[DEPLOY] dist/ built successfully for %s", venture_id)
+        except Exception as exc:
+            raise HTTPException(500, f"Build step failed: {exc}")
+
+    # ── Deploy to Railway ──────────────────────────────────────────────────
+    if not railway_available():
+        raise HTTPException(
+            503,
+            "RAILWAY_TOKEN not configured.\n"
+            "  1. railway.app → avatar → Account Settings → Tokens → New Token\n"
+            "  2. Set RAILWAY_TOKEN=<token> in Railway → your service → Variables\n"
+            "  3. Try again — no redeploy of the API needed, just add the variable."
+        )
+
     try:
-        log.info("[DEPLOY] Deploying %s to Railway | dir=%s", venture_id, build_dir)
+        log.info("[DEPLOY] Deploying to Railway | venture=%s", venture_id)
         url = await deploy_to_railway(venture_id, build_dir)
-        log.info("[DEPLOY] ✓ Live | venture=%s url=%s", venture_id, url)
+        log.info("[DEPLOY] ✓ Railway | url=%s", url)
     except Exception as exc:
-        log.exception("[DEPLOY] Railway deploy failed for %s: %s", venture_id, exc)
+        log.exception("[DEPLOY] Railway deployment failed: %s", exc)
         raise HTTPException(500, f"Railway deployment failed: {exc}")
 
     # ── Persist live_url to Supabase ─────────────────────────────────────────
@@ -727,6 +1116,95 @@ async def deploy_venture(venture_id: str) -> dict:
         log.warning("[DEPLOY] Could not update ventures table: %s", exc)
 
     return {"ok": True, "url": url, "venture_id": venture_id}
+
+
+@app.post("/api/ventures/cleanup")
+def bulk_cleanup_ventures() -> dict:
+    """
+    Kill all non-revenue ventures that are IDEATION, stale DEVELOPMENT, or FAILED.
+    Keeps: LIVE, SCALING, and any venture with a live_url (deployed product).
+    Returns: {killed_count, kept_count, details}
+    """
+    from packages.db.client import get_db, is_supabase_connected
+    from packages.revenue.store import list_ventures
+
+    all_v = list_ventures()
+    keep_statuses  = {"LIVE", "SCALING"}
+    killed_ids:  list[str] = []
+    kept_ids:    list[str] = []
+
+    for v in all_v:
+        vid    = v.get("venture_id", "")
+        status = v.get("status", "")
+        live   = v.get("live_url")
+
+        # Keep anything live or deployed
+        if status in keep_statuses or live:
+            kept_ids.append(vid)
+            continue
+
+        # Kill stale/incomplete ventures
+        if status in ("IDEATION", "DEVELOPMENT", "QA", "KILLED") or not v.get("go_decision"):
+            killed_ids.append(vid)
+
+    if killed_ids and is_supabase_connected():
+        try:
+            db = get_db()
+            for vid in killed_ids:
+                db.table("ventures").update({"status": "KILLED"}).eq("venture_id", vid).execute()
+            _cache.pop("portfolio", None)   # invalidate portfolio cache
+            log.info("[CLEANUP] Killed %d stale ventures", len(killed_ids))
+        except Exception as exc:
+            log.warning("[CLEANUP] DB update failed: %s", exc)
+    elif killed_ids:
+        # Local mode — update in JSON store
+        from packages.revenue.store import kill_venture_local
+        for vid in killed_ids:
+            try:
+                kill_venture_local(vid)
+            except Exception:
+                pass
+
+    return {
+        "killed_count": len(killed_ids),
+        "kept_count":   len(kept_ids),
+        "killed":       killed_ids,
+        "kept":         kept_ids,
+    }
+
+
+@app.post("/api/waitlist/{product_id}/join")
+async def join_waitlist_post(product_id: str, request: Request) -> dict:
+    """
+    POST /api/waitlist/{product_id}/join   body: {"email": "..."}
+    """
+    import re as _re
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Request body must be JSON with 'email' field")
+
+    email = (body.get("email") or "").strip().lower()
+    if not email or not _re.match(r"^[^@]+@[^@]+\.[^@]+$", email):
+        raise HTTPException(422, "Valid email address required")
+
+    from packages.db.client import get_db, is_supabase_connected
+    if not is_supabase_connected():
+        # Store locally — will be pushed to Supabase once connected
+        log.info("[WAITLIST] %s signed up for %s (local mode)", email, product_id)
+        return {"ok": True, "product_id": product_id, "email": email, "mode": "local"}
+
+    try:
+        db = get_db()
+        db.table("product_waitlist").upsert(
+            {"product_id": product_id, "email": email},
+            on_conflict="product_id,email",
+        ).execute()
+        log.info("[WAITLIST] %s → %s", email, product_id)
+        return {"ok": True, "product_id": product_id, "email": email}
+    except Exception as exc:
+        log.warning("[WAITLIST] insert failed: %s", exc)
+        raise HTTPException(500, "Could not save your email. Please try again.")
 
 
 @app.get("/api/products")
@@ -750,22 +1228,24 @@ def get_products() -> dict:
 
 @app.get("/api/portfolio")
 def get_portfolio() -> dict:
-    live_data = _portfolio_from_supabase()
-    if live_data:
-        return live_data
-    slots = portfolio_slots()
-    live = sum(1 for s in slots if s["status"] == "LIVE")
-    return {"total_slots": len(slots), "live_count": live, "slots": slots, "source": "mock"}
+    def _compute():
+        live_data = _portfolio_from_supabase()
+        if live_data:
+            return live_data
+        slots = portfolio_slots()
+        live = sum(1 for s in slots if s["status"] == "LIVE")
+        return {"total_slots": len(slots), "live_count": live, "slots": slots, "source": "mock"}
+    return _cached("portfolio", _CACHE_TTL, _compute)
 
 
 @app.get("/api/trends")
 def get_trends() -> dict:
-    return trend_heatmap()
+    return _cached("trends", _CACHE_TTL, trend_heatmap)
 
 
 @app.get("/api/security/alerts")
 def get_security_alerts() -> dict:
-    return {"alerts": security_alerts()}
+    return _cached("security", _CACHE_TTL, lambda: {"alerts": security_alerts()})
 
 
 # ---------------------------------------------------------------------------
@@ -773,23 +1253,66 @@ def get_security_alerts() -> dict:
 # ---------------------------------------------------------------------------
 
 @app.post("/api/pipeline/run")
-async def trigger_pipeline(body: PipelineRunBody, background_tasks: BackgroundTasks) -> dict:
+async def trigger_pipeline(
+    body: PipelineRunBody,
+    background_tasks: BackgroundTasks,
+    request: Request,
+) -> dict:
     """
-    Launch a full pipeline run asynchronously.
-    Returns immediately with {run_id, venture_id, status: "STARTED"}.
-    Poll GET /api/pipeline/{run_id} for live status.
+    Launch a pipeline run.
+    - If called with a valid customer JWT (Authorization header): enforces plan limits.
+    - If called from the admin Command Center (no JWT or admin email): unlimited.
+    Returns {run_id, venture_id, status: 'STARTED'}.
     """
     from packages.state.agent_state import init_state
+    import os as _os
 
+    # ── Customer plan enforcement ────────────────────────────────────────────
+    user_id: str | None = None
+    auth_header = request.headers.get("Authorization", "")
+
+    if auth_header.startswith("Bearer "):
+        jwt = auth_header[7:]
+        try:
+            from supabase import create_client as _sc
+            supa      = _sc(_os.getenv("SUPABASE_URL", ""), _os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
+            user_resp = supa.auth.get_user(jwt)
+            caller    = user_resp.user
+
+            # Admin callers: skip limit checks
+            admin_email = _os.getenv("VITE_ADMIN_EMAIL", "")
+            if caller.email and caller.email != admin_email:
+                user_id = caller.id
+                profile = _get_user_profile(user_id)
+                plan    = (profile or {}).get("plan", "starter")
+                limit   = _PLAN_RUN_LIMITS.get(plan, 1)
+                used    = _count_user_runs_this_month(user_id)
+
+                if limit != -1 and used >= limit:
+                    raise HTTPException(
+                        429,
+                        f"Monthly run limit reached ({used}/{limit} for {plan} plan). "
+                        "Upgrade to Builder ($49/mo) for 10 runs, or Studio for unlimited."
+                    )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            log.debug("[PIPELINE_RUN] Auth check skipped: %s", exc)
+
+    # ── Launch ───────────────────────────────────────────────────────────────
     state = init_state(body.venture_id)
-    run_id = state["run_id"]
+    run_id     = state["run_id"]
     venture_id = state["venture_id"]
 
-    registry.start(run_id, venture_id, body.department)
-    background_tasks.add_task(_run_pipeline_background, state, body.department)
+    # Tag the run with user_id so it appears in their dashboard
+    if user_id:
+        state["_user_id"] = user_id  # passed to background task
 
-    log.info("[PIPELINE_API] Launched run_id=%s venture_id=%s dept=%s",
-             run_id, venture_id, body.department)
+    registry.start(run_id, venture_id, body.department)
+    background_tasks.add_task(_run_pipeline_background, state, body.department, user_id)
+
+    log.info("[PIPELINE_API] Launched run_id=%s venture_id=%s dept=%s user=%s",
+             run_id, venture_id, body.department, user_id or "admin")
     return {"run_id": run_id, "venture_id": venture_id, "status": "STARTED"}
 
 

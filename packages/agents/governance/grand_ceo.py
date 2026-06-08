@@ -9,7 +9,7 @@ Output:  VentureBrief with go_decision + ranked niche_shortlist stored for futur
 LLM Council design (2026-05-31):
   - Operator profile injected into every decision (constraints-aware analysis)
   - 4-dimension scoring rubric: TAM + CompetitionGap + BuildScore + RevenueVelocity
-  - GO_THRESHOLD = 65 / 100 (raises bar from previous always-pass heuristic)
+  - GO_THRESHOLD = 70 / 100 (raises bar from previous always-pass heuristic)
   - CEO outputs ranked shortlist of 3 niches — #2 and #3 stored for next run
   - Skeptic's best argument quoted and explicitly answered (cannot be hand-waved)
   - Niche memory: exhausted/KILL'd niches excluded before evaluation
@@ -76,7 +76,7 @@ REVENUE_VELOCITY (0-25): Realistic path to first paid customer within 90 days
   8  = Requires sales calls, procurement, or institutional approval
   0  = No clear monetisation path without significant marketing spend
 
-GO_THRESHOLD: Total score >= 65 to issue go_decision: true
+GO_THRESHOLD: Total score >= 70 to issue go_decision: true
 """
 
 # ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ Your task:
 2. Identify 3 candidate niches (can include the council's pick or substitutes)
 3. Score each using the 4-dimension rubric
 4. Rank them by total score
-5. Only set go_decision: true if the top-ranked niche scores >= 65
+5. Only set go_decision: true if the top-ranked niche scores >= 70
 
 RETURN ONLY this JSON (no markdown, first char must be {{):
 {{
@@ -205,7 +205,6 @@ RETURN ONLY this JSON (no markdown, first char must be {{):
       "trend_evidence": "..."
     }}
   ],
-  "venture_id": "ven_{short_id}",
   "venture_type": "MICRO_SAAS | AFFILIATE_SITE",
   "department": "PRODUCT",
   "niche": "The rank-1 niche string",
@@ -247,18 +246,16 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
 
     debate    = dossier.get("debate_summary") or {}
     synthesis = debate.get("synthesis", "") if isinstance(debate, dict) else str(debate)
-    short_id  = uuid.uuid4().hex[:8]
 
     user_prompt = _USER_PROMPT_TEMPLATE.format(
         research_dossier=json.dumps(
             {k: v for k, v in dossier.items() if k != "debate_transcript"},
             indent=2,
         ),
-        primary_niche    = dossier.get("recommended_primary_niche", "unknown"),
+        primary_niche      = dossier.get("recommended_primary_niche", "unknown"),
         council_confidence = dossier.get("council_confidence", 0.0),
-        debate_synthesis = synthesis[:600] if synthesis else "No debate synthesis available",
-        exhausted_niches = ", ".join(exhausted[:20]) if exhausted else "none",
-        short_id         = short_id,
+        debate_synthesis   = synthesis[:600] if synthesis else "No debate synthesis available",
+        exhausted_niches   = ", ".join(exhausted[:20]) if exhausted else "none",
     )
 
     try:
@@ -289,16 +286,35 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
         log.info("[CEO_NODE] MEDIA_CHANNEL overridden to MICRO_SAAS (product focus phase)")
 
     # ── Validate go_decision against GO_THRESHOLD ────────────────────────────
+    # Calculate total from the 4 rubric dimensions (each 0-25, total 0-100).
+    # Do NOT use confidence_score — Gemini Flash leaves it at 0 (unset default)
+    # while filling tam_score/competition_gap/build_score/revenue_velocity correctly.
     shortlist  = brief_data.get("niche_shortlist", [])
     top_niche  = shortlist[0] if shortlist else {}
-    total_score = top_niche.get("confidence_score", 0)
-    if total_score < 65 and brief_data.get("go_decision") is True:
+    dim_total = (
+        int(top_niche.get("tam_score",       0) or 0)
+        + int(top_niche.get("competition_gap",  0) or 0)
+        + int(top_niche.get("build_score",      0) or 0)
+        + int(top_niche.get("revenue_velocity", 0) or 0)
+    )
+    # Fallback to confidence_score only when dimension scores are all zero/absent
+    total_score = dim_total if dim_total > 0 else int(top_niche.get("confidence_score", 0) or 0)
+    if total_score < 70 and brief_data.get("go_decision") is True:
         brief_data["go_decision"] = False
         brief_data["go_rationale"] = (
-            f"Score {total_score}/100 below GO_THRESHOLD of 65. "
+            f"Score {total_score}/100 below GO_THRESHOLD of 70. "
             + brief_data.get("go_rationale", "")
         )
-        log.warning("[CEO_NODE] go_decision overridden to False — score %d < 65", total_score)
+        log.warning("[CEO_NODE] go_decision overridden to False — score %d < 70", total_score)
+
+    # ── CRITICAL: NEVER change venture_id — use the original from state ────────
+    # The LLM used to generate "venture_id": "ven_XXXXXXXX" in its response.
+    # This created a bifurcation: pipeline_runs used the original ID, but all
+    # build artifacts, QA reports, and deploys went under the new LLM ID.
+    # Result: every pipeline showed "No build found" because the UI queried the
+    # original ID but builds were written under the LLM-generated ID.
+    # Fix: always use state["venture_id"]. The LLM should not generate IDs.
+    brief_data["venture_id"] = venture_id
 
     brief_payload = VentureBriefPayload(**{
         k: v for k, v in brief_data.items()
@@ -306,9 +322,9 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
     })
 
     # ── CRITICAL: upsert venture BEFORE pipeline_run FK insert ───────────────
-    new_venture_id = brief_payload.venture_id
+    new_venture_id = venture_id   # same as original — no more bifurcation
     upsert_venture({
-        "venture_id":       new_venture_id,
+        "venture_id":       venture_id,
         "venture_type":     brief_payload.venture_type,
         "niche":            brief_payload.niche,
         "status":           "IDEATION",
@@ -351,16 +367,16 @@ async def grand_ceo_node(state: AgentState) -> AgentState:
     event = make_event(
         event_type    = EventType.VENTURE_BRIEF_READY,
         source_agent  = AgentID.GRAND_CEO,
-        target_agent  = AgentID.PRODUCT_VP,   # product-only phase
+        target_agent  = AgentID.PRODUCT_VP,
         payload       = brief_payload,
         run_id        = run_id,
-        venture_id    = new_venture_id,
+        venture_id    = venture_id,
         pipeline_stage = "CEO_NODE",
         token_cost    = response.total_tokens,
         latency_ms    = response.latency_ms,
     )
 
-    log_agent_event(run_id, new_venture_id, "GRAND_CEO", "SUCCESS",
+    log_agent_event(run_id, venture_id, "GRAND_CEO", "SUCCESS",
                     tokens_used=response.total_tokens, latency_ms=response.latency_ms,
                     current_task=(
                         f"Primary: {brief_payload.niche} | "

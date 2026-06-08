@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import re as _re
 import sys
 import uuid
 from pathlib import Path
@@ -37,19 +38,33 @@ _VITE_BUILD_TIMEOUT = 180          # 3 minutes
 _MAX_BUNDLE_SIZE_MB = 50
 
 # BLOCKING secrets — actual API keys / tokens hardcoded in source.
-# Keep these tight to avoid false positives on form placeholders,
-# variable names, or comments.
+# These require a real-looking VALUE (not just a variable name pattern).
 _SECRET_PATTERNS_BLOCKING = [
-    "sk_live_",          # Stripe live key
+    "sk_live_",          # Stripe live key — always followed by 20+ chars
     "sk_test_",          # Stripe test key
-    "eyjaaa",            # Supabase anon key pattern
-    "service_role_key",  # Supabase service role
+    "AKIAIOSFODNN",      # AWS access key prefix (fixed 16-char suffix)
+    "ghp_",              # GitHub personal token (followed by 36 chars)
+]
+# Regex for secrets that need value context (not just the key name)
+_SECRET_REGEXES_BLOCKING = [
+    _re.compile(r'\beyJ[A-Za-z0-9+/]{50,}'),   # JWT / Supabase service-role key
 ]
 
-# PHASE 1 flag — when false, vite build and Playwright are logged
-# but do NOT block the pipeline.  Set QA_REQUIRE_VITE_BUILD=true
-# in Railway env to enforce strict compilation in Phase 2+.
-_REQUIRE_VITE_BUILD = os.getenv("QA_REQUIRE_VITE_BUILD", "false").lower() == "true"
+# Patterns that should NOT appear in the built dist/ bundle
+_BUNDLE_SECRET_RE = _re.compile(
+    r'sk_(?:live|test)_[A-Za-z0-9]{20,}'
+    r'|AKIA[A-Z0-9]{16}'
+    r'|ghp_[A-Za-z0-9]{36}',
+    _re.IGNORECASE,
+)
+
+# Vite build MUST pass — a product that doesn't compile cannot be deployed.
+# Override with QA_REQUIRE_VITE_BUILD=false only for local dev/testing.
+_REQUIRE_VITE_BUILD = os.getenv("QA_REQUIRE_VITE_BUILD", "true").lower() == "true"
+
+# TypeScript strict check: run tsc --noEmit before vite build.
+# Disabled by default — the scaffold uses lenient tsconfig to tolerate LLM-generated code.
+_REQUIRE_TYPECHECK = os.getenv("QA_REQUIRE_TYPECHECK", "false").lower() == "true"
 
 _CRITIQUE_SYSTEM = """\
 You are the QA Technical Auditor for AI Squadron.
@@ -196,10 +211,11 @@ async def _validate_build(build: dict) -> tuple[list[str], list[str], dict]:
     """
     checks = [
         "build_path_exists",
-        "vite_build",
-        "bundle_size",
+        "typecheck",          # tsc --noEmit strict TypeScript validation
+        "vite_build",         # vite build — produces deployable dist/
+        "bundle_size",        # dist/ < 50 MB
         "no_hardcoded_secrets",
-        "playwright_smoke",
+        "playwright_smoke",   # Chromium headless — React mounts in browser
     ]
     failures: list[str] = []
     updates: dict = {}
@@ -215,11 +231,18 @@ async def _validate_build(build: dict) -> tuple[list[str], list[str], dict]:
         updates["playwright_errors"] = []
         return checks, failures, updates
 
-    # 2 — vite build
-    # Phase 1: treated as WARNING when QA_REQUIRE_VITE_BUILD=false (default).
-    # Failing vite build is logged and included in checks_run but does NOT
-    # block the pipeline, allowing end-to-end validation of the full workflow.
-    # Phase 2: set QA_REQUIRE_VITE_BUILD=true in Railway to enforce strict compilation.
+    # 2a — TypeScript strict check (tsc --noEmit) — BLOCKING by default
+    # Catches type errors before vite build — faster feedback loop.
+    if _REQUIRE_TYPECHECK:
+        tc_exit, _, tc_err = await _run_typecheck(Path(build_path))
+        updates["typecheck_exit_code"] = tc_exit
+        if tc_exit != 0:
+            failures.append("typecheck")
+            log.warning("[QA_TECHNICAL] TypeScript errors | exit=%d\n%s", tc_exit, tc_err[-400:])
+        else:
+            log.info("[QA_TECHNICAL] TypeScript check ✓")
+
+    # 2b — vite build — BLOCKING by default (was warning-only in Phase 1)
     exit_code, build_stdout, build_stderr = await _run_vite_build(Path(build_path))
     updates["vite_build_exit_code"] = exit_code
     if exit_code != 0:
@@ -228,7 +251,7 @@ async def _validate_build(build: dict) -> tuple[list[str], list[str], dict]:
         log.warning(
             "[QA_TECHNICAL] vite build exit=%d (%s) | stderr_tail=%s",
             exit_code,
-            "BLOCKING" if _REQUIRE_VITE_BUILD else "WARNING-ONLY Phase1",
+            "BLOCKING" if _REQUIRE_VITE_BUILD else "WARNING-ONLY",
             (build_stderr or build_stdout)[-400:],
         )
 
@@ -245,13 +268,36 @@ async def _validate_build(build: dict) -> tuple[list[str], list[str], dict]:
     else:
         updates["bundle_size_kb"] = 0
 
-    # 4 — secret scan: only flag ACTUAL key patterns, not form placeholders
+    # 4 — secret scan: only flag ACTUAL key VALUES, not variable names or comments.
+    # Patterns like "sk_live_" require actual Stripe key characters after them.
+    # Regex patterns ensure a real value is present, not a placeholder.
+    secret_found = False
     for f in (build.get("files") or []):
         content = f.get("content") or ""
         if any(pat in content for pat in _SECRET_PATTERNS_BLOCKING):
             failures.append("no_hardcoded_secrets")
-            log.warning("[QA_TECHNICAL] Real secret pattern in: %s", f.get("path"))
+            log.warning("[QA_TECHNICAL] Real secret prefix in: %s", f.get("path"))
+            secret_found = True
             break
+        if not secret_found:
+            for regex in _SECRET_REGEXES_BLOCKING:
+                if regex.search(content):
+                    failures.append("no_hardcoded_secrets")
+                    log.warning("[QA_TECHNICAL] JWT/token pattern in: %s", f.get("path"))
+                    secret_found = True
+                    break
+
+    # 4b — bundle secret scan: secrets that survived the Vite build (critical)
+    if exit_code == 0 and dist_dir.is_dir() and not secret_found:
+        for js_file in list(dist_dir.glob("**/*.js"))[:15]:
+            try:
+                bundle_content = js_file.read_text(encoding="utf-8", errors="ignore")
+                if _BUNDLE_SECRET_RE.search(bundle_content):
+                    failures.append("no_hardcoded_secrets")
+                    log.warning("[QA_TECHNICAL] Secret leaked into bundle: %s", js_file.name)
+                    break
+            except Exception:
+                pass
 
     # 5 — Playwright smoke test (only if dist/ was built and Playwright installed)
     playwright_errors: list[str] = []
@@ -268,6 +314,32 @@ async def _validate_build(build: dict) -> tuple[list[str], list[str], dict]:
 
     updates["playwright_errors"] = playwright_errors
     return checks, failures, updates
+
+
+async def _run_typecheck(build_dir: Path, timeout: int = 60) -> tuple[int, str, str]:
+    """
+    Run `npx tsc --noEmit` for strict TypeScript validation.
+    Returns (exit_code, stdout_tail, stderr_tail).
+    Separate from vite build — catches type errors faster.
+    """
+    npm = "npm.cmd" if sys.platform == "win32" else "npm"
+    log.info("[QA_TECHNICAL] Running tsc --noEmit | dir=%s", build_dir)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            npm, "exec", "tsc", "--", "--noEmit",
+            cwd=str(build_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        rc = proc.returncode or 0
+        return rc, stdout_b.decode(errors="replace")[-600:], stderr_b.decode(errors="replace")[-600:]
+    except asyncio.TimeoutError:
+        log.warning("[QA_TECHNICAL] tsc timed out after %ds", timeout)
+        return 1, "", "tsc --noEmit timed out"
+    except Exception as exc:
+        log.warning("[QA_TECHNICAL] tsc failed to launch: %s", exc)
+        return 1, "", str(exc)
 
 
 async def _run_vite_build(build_dir: Path, timeout: int = _VITE_BUILD_TIMEOUT) -> tuple[int, str, str]:

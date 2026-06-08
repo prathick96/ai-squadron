@@ -2,7 +2,7 @@
 packages/agents/shared/legal_agent.py
 Legal & Compliance Agent — veto authority over all deployments.
 
-Model:   claude-haiku-4-5 (Google project-level 403 — swap to gemini-2.5-pro when resolved)
+Model:   claude-sonnet-4-6 (upgraded from Haiku — legal veto requires best-in-class reasoning)
 Input:   Build artifact (product) or Content package (media) + platform context
 Output:  LegalClearance — cleared or denied with specific clause references
 
@@ -13,7 +13,7 @@ Responsibilities:
   - Weekly automated ToS fetch + diff for all platforms
   - Per-deployment compliance review (copyright, metadata, content claims)
   - GDPR/CCPA data handling review for SaaS products
-  - Stripe ToS review for payment integrations
+  - Stripe/Paddle ToS review for payment integrations
   - Railway AUP review for hosted products
 
 Weekly schedule (triggered by Revenue Engine):
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -77,19 +78,29 @@ _PLATFORM_RULES: dict[str, dict[str, Any]] = {
         "tos_url": "https://help.instagram.com/581066165581870",
         "tos_version": "2024-01",
     },
-    "stripe": {
+    "razorpay": {
         "prohibited_business_types": [
-            "gambling", "adult_content", "cryptocurrency", "multi_level_marketing",
+            "gambling", "adult_content", "firearms", "drugs", "multi_level_marketing",
+            "cryptocurrency_exchange", "pyramid_schemes",
         ],
         "requires_clear_refund_policy": True,
-        "dispute_rate_threshold": 0.005,   # 0.5% — above this triggers review
-        "tos_url": "https://stripe.com/legal/ssa",
-        "tos_version": "2024-06",
+        "requires_product_description": True,
+        "settlement_currency": "INR",  # RBI regulation — settles in INR regardless of charge currency
+        "international_payments_require_activation": True,
+        "dispute_rate_threshold": 0.01,  # 1% dispute rate triggers review
+        "tos_url": "https://razorpay.com/terms/",
+        "tos_version": "2024-01",
     },
     "railway": {
         "prohibited_use": ["mining", "ddos", "spam", "illegal_content"],
         "requires_legal_business_purpose": True,
         "tos_url": "https://railway.app/legal/fair-use",
+        "tos_version": "2024-01",
+    },
+    "supabase": {
+        "prohibited_use": ["storing_pii_without_encryption", "scraping_without_consent"],
+        "requires_rls_for_user_data": True,
+        "tos_url": "https://supabase.com/terms",
         "tos_version": "2024-01",
     },
 }
@@ -106,25 +117,43 @@ PERSONA — THE ENFORCER (Relentless Legal Adversary):
   You are not here to make friends. You are here to make sure AI Squadron never loses in court.
   Decision rule: "What is the worst-case reading of this, and does it survive that reading?"
 
-Your ONLY job: identify BUSINESS and CONTENT compliance issues.
+PLATFORM CONTEXT (critical — read before evaluating):
+  Every product is built on the AI Squadron platform. The PLATFORM already provides:
+    - Refund policy:  https://ai-squadron.app/legal/refund
+    - Privacy policy: https://ai-squadron.app/legal/privacy
+    - Terms of service: https://ai-squadron.app/legal/terms
+    - Payment processing: handled by Razorpay under the platform account
+  Individual product apps do NOT need their own refund/privacy/terms pages.
+  These are PLATFORM-level obligations, already satisfied. Do NOT flag their absence as a violation.
+
+Your ONLY job: identify BUSINESS and CONTENT compliance issues:
   - Platform Terms of Service violations (prohibited content, metadata rules)
   - Copyright exposure (music, trademarked names, unlicensed assets)
-  - Data privacy issues (GDPR/CCPA if collecting user data)
-  - Payment compliance (Stripe ToS)
+  - Data privacy issues (GDPR/CCPA if collecting sensitive personal data beyond email)
+  - Payment compliance: only flag if the venture's NICHE is prohibited by Razorpay
+    (gambling, adult content, firearms, drugs, MLM, crypto exchanges)
+  - Railway AUP: only flag if the product's purpose is illegal, spam, or mining
 
-DO NOT flag technical / runtime issues — those are QA's responsibility:
-  - Missing environment variables → NOT a legal issue
-  - React mount failures, TypeScript errors → NOT a legal issue
-  - Missing refund policy in code → Only flag if the DEPLOYED PRODUCT actively claims
-    no refunds without disclosing it to users
+DO NOT flag as BLOCKER:
+  - Missing refund policy in the built app (platform-level, already covered)
+  - Missing privacy policy in the built app (platform-level, already covered)
+  - Missing terms of service in the built app (platform-level, already covered)
+  - Missing environment variables — NOT a legal issue
+  - React mount failures, TypeScript errors — NOT a legal issue
+  - Build paths, file sizes, test results — NOT a legal issue
+  - Analytics without consent banner — WARNING only, not BLOCKER
 
-Be precise — cite the specific clause, not vague concerns.
-Do not block deployment for theoretical risks — only for concrete, named policy violations.
+SEVERITY RULES — be precise, not paranoid:
+  BLOCKER = concrete, named ToS clause violated with specific evidence → must fix before deploy.
+  WARNING = potential risk with no concrete evidence → deploy allowed, logged for review.
+  Never invent blockers. If in doubt → WARNING, not BLOCKER.
+  Most clean SaaS products should return is_cleared: true with zero or one WARNING.
 
-BLOCKER = concrete ToS or legal clause violated → must fix before deploy.
-WARNING = potential risk, deploy allowed but log it.
-
-Output ONLY valid JSON — no markdown, no preamble.
+OUTPUT RULES — CRITICAL:
+  - Output ONLY valid JSON. No markdown. No preamble. No trailing text.
+  - Keep policy_flags list short: only concrete findings, never hypotheticals.
+  - Keep description fields under 120 characters each.
+  - First character MUST be { and last character MUST be }
 """
 
 _REVIEW_TEMPLATE = """
@@ -132,34 +161,38 @@ Platform(s): {platforms}
 Venture type: {venture_type}
 Niche: {niche}
 
-Content/Product summary:
+Product/Content summary (technical build details excluded):
 {artifact_summary}
 
-Known platform rules:
+Platform compliance rules:
 {platform_rules}
 
-Review for:
-1. Content policy compliance (prohibited patterns, misleading claims)
-2. Copyright exposure (music, footage, brand names, trademarked terms)
-3. Metadata compliance (title length, description, prohibited phrases)
-4. Data privacy (GDPR/CCPA if collecting user data)
-5. Payment compliance (Stripe ToS if monetising)
+Review for (PRODUCT pipelines):
+1. Railway AUP: Is this a legitimate business product? (not spam/mining/illegal)
+2. Razorpay: Does this NICHE violate Razorpay's prohibited business categories?
+   Prohibited: gambling, adult content, firearms, drugs, crypto exchange, pyramid schemes.
+   NOTE: Refund policy is PLATFORM-LEVEL at /legal/refund — do NOT flag its absence.
+3. GDPR/CCPA: Does the niche involve collecting sensitive personal data beyond email?
+   Standard email + usage analytics is acceptable — platform privacy policy covers this.
+4. Copyright: Does the niche or content use trademarked names or licensed assets?
+5. Misleading claims: Does the product description make provably false promises?
 
-Return ONLY:
+Output this exact JSON structure (keep arrays short — max 5 flags):
 {{
   "is_cleared": true,
   "policy_flags": [
     {{
-      "platform": "youtube",
-      "clause": "Spam, deceptive practices and scams policy",
-      "description": "Title contains 'earn money fast' which violates spam policy",
+      "platform": "railway",
+      "clause": "AUP Section 2",
+      "description": "One-line description under 120 chars",
       "severity": "BLOCKER",
-      "recommendation": "Rewrite title to remove income guarantee language"
+      "recommendation": "Specific fix under 100 chars"
     }}
   ],
   "copyright_clear": true,
-  "gdpr_reviewed": false,
-  "notes": "Optional brief summary"
+  "gdpr_reviewed": true,
+  "gdpr_notes": "Brief GDPR assessment",
+  "notes": "One-line overall summary"
 }}
 """
 
@@ -182,25 +215,35 @@ async def legal_agent_node(state: AgentState) -> AgentState:
         venture_type = "MEDIA_CHANNEL"
     else:
         artifact = state.get("build_artifact") or {}
-        platforms = ["railway", "stripe"]
+        platforms = ["railway", "razorpay"]
         venture_type = venture_brief.get("venture_type", "MICRO_SAAS")
 
     niche = venture_brief.get("niche", "unknown")
 
-    # Fields that are technical build metadata — NOT relevant for compliance review.
-    # The Legal Agent must only judge BUSINESS/CONTENT compliance, not runtime errors.
-    # Including playwright_errors or vite_build_exit_code causes Claude to wrongly
-    # flag TypeScript compilation issues as policy violations.
+    # Exclude all technical build fields — legal must only judge BUSINESS/CONTENT compliance.
+    # Including vite_build_exit_code or playwright_errors causes false legal blockers.
     _TECHNICAL_BUILD_FIELDS = {
         "files", "components_generated", "script",
         "playwright_errors", "vite_build_exit_code", "bundle_size_kb",
         "build_path", "build_hash", "test_results",
         "retry_patches_applied", "is_retry", "build_dir",
+        "typecheck_exit_code",
     }
-    artifact_summary: dict[str, Any] = {
+    raw_summary: dict[str, Any] = {
         k: v for k, v in artifact.items()
         if k not in _TECHNICAL_BUILD_FIELDS
     }
+    # Truncate any string values > 300 chars to prevent prompt explosion and response truncation.
+    # The legal agent needs the niche/description, not full file contents or dependency lists.
+    artifact_summary: dict[str, Any] = {}
+    for k, v in raw_summary.items():
+        if isinstance(v, str) and len(v) > 300:
+            artifact_summary[k] = v[:300] + "…[truncated]"
+        elif isinstance(v, list) and len(v) > 10:
+            artifact_summary[k] = v[:10]  # cap long lists
+        else:
+            artifact_summary[k] = v
+
     if department == "MEDIA" and "script" in artifact:
         script = artifact["script"]
         if isinstance(script, dict):
@@ -211,8 +254,12 @@ async def legal_agent_node(state: AgentState) -> AgentState:
     flags: list[dict[str, Any]] = _deterministic_checks(artifact, platforms, department)
     immediate_blockers = [f for f in flags if f["severity"] == "BLOCKER"]
 
-    # LLM review for edge cases
-    platform_rules_summary = {p: _PLATFORM_RULES.get(p, {}) for p in platforms}
+    # Exclude internal platform detail (tos_url, tos_version) — keep rules concise for prompt
+    platform_rules_summary = {
+        p: {k: v for k, v in _PLATFORM_RULES.get(p, {}).items()
+            if k not in ("tos_url", "tos_version")}
+        for p in platforms
+    }
     user_prompt = _REVIEW_TEMPLATE.format(
         platforms=", ".join(platforms),
         venture_type=venture_type,
@@ -221,22 +268,34 @@ async def legal_agent_node(state: AgentState) -> AgentState:
         platform_rules=json.dumps(platform_rules_summary, indent=2),
     )
 
+    response = type("R", (), {"total_tokens": 0, "latency_ms": 0})()
     try:
         response = await call_llm(
-            "LEGAL_AGENT", _REVIEW_SYSTEM_PROMPT, user_prompt, temperature=0.1,
+            "LEGAL_AGENT", _REVIEW_SYSTEM_PROMPT, user_prompt,
+            temperature=0.1,
+            # 2048 tokens is enough for the response JSON (5 flags × ~100 chars each ≈ 500 tokens)
+            # while preventing the massive truncation seen with the uncapped default (8192 tokens
+            # produced 28000+ char responses that were cut off mid-string by the prior Haiku model).
+            max_tokens=2048,
         )
-        review: dict[str, Any] = json.loads(extract_json(response.text))
+        raw_json = extract_json(response.text)
+        review: dict[str, Any] = json.loads(raw_json)
         llm_flags = review.get("policy_flags", [])
         llm_cleared = review.get("is_cleared", True)
         copyright_clear = review.get("copyright_clear", True)
         gdpr_reviewed = review.get("gdpr_reviewed", False)
-    except Exception as exc:
-        log.warning("[LEGAL_NODE] LLM review failed, using deterministic only: %s", exc)
+    except (json.JSONDecodeError, Exception) as exc:
+        # JSON parse failure means the LLM response was truncated or malformed.
+        # Do NOT use regex to extract is_cleared — a partial response may show false=false
+        # before the full context is evaluated, causing false denials.
+        # Fall back to deterministic checks only (which are now precise and reliable).
+        log.warning("[LEGAL_NODE] LLM review failed (%s) — using deterministic checks only", exc)
+        raw = getattr(response, "text", "") or ""
+        log.warning("[LEGAL_NODE] raw_len=%d raw_start=%r", len(raw), raw[:80])
         llm_flags = []
         llm_cleared = len(immediate_blockers) == 0
         copyright_clear = True
         gdpr_reviewed = False
-        response = type("R", (), {"total_tokens": 0, "latency_ms": 0})()
 
     # Merge deterministic + LLM flags
     all_flags = flags + [f for f in llm_flags if f not in flags]
@@ -346,20 +405,41 @@ def _deterministic_checks(
                 })
 
     if department == "PRODUCT":
-        # Check for hardcoded secrets (basic scan)
+        # Scan LLM-generated files for actual hardcoded secret VALUES (not variable names).
+        # Each pattern requires a real non-placeholder value after the key name.
+        # This prevents false positives from env-var comments, form placeholders, and
+        # type annotations that happen to contain words like "api_key" or "password".
+        _SECRET_REGEXES = [
+            # Stripe live/test keys — always sk_live_ or sk_test_ followed by 20+ chars
+            (re.compile(r'\bsk_(?:live|test)_[A-Za-z0-9]{20,}'), "Stripe secret key hardcoded"),
+            # GitHub personal access token
+            (re.compile(r'\bghp_[A-Za-z0-9]{36}\b'), "GitHub token hardcoded"),
+            # AWS access key ID
+            (re.compile(r'\bAKIA[A-Z0-9]{16}\b'), "AWS access key hardcoded"),
+            # Generic: key/secret/token assigned to a string literal value (20+ non-placeholder chars)
+            # Matches: api_key = "AIzaSyC1234..." or secret = 'eyJhbGci...'
+            # Does NOT match: api_key = import.meta.env.VITE_API_KEY  (env var reference)
+            # Does NOT match: // VITE_API_KEY=your_api_key_here  (comment placeholder)
+            (re.compile(
+                r'(?:api_key|secret_key|private_key|access_token|auth_token)\s*[=:]\s*'
+                r'["\'][A-Za-z0-9+/=_\-]{20,}["\']',
+                re.IGNORECASE,
+            ), "API key with hardcoded value (not an env var reference)"),
+        ]
         files = artifact.get("files", [])
         for f in (files if isinstance(files, list) else []):
-            content = f.get("content", "")
-            for secret_pattern in ["sk_live_", "sk_test_", "api_key=", "password="]:
-                if secret_pattern in content.lower():
+            content = f.get("content", "") or ""
+            path = f.get("path", "unknown")
+            for pattern, label in _SECRET_REGEXES:
+                if pattern.search(content):
                     flags.append({
                         "platform": "railway",
-                        "clause": "Security best practices / AUP",
-                        "description": f"Possible hardcoded secret in {f.get('path', 'unknown')}",
+                        "clause": "Security best practices / AUP §3",
+                        "description": f"{label} in {path}",
                         "severity": "BLOCKER",
-                        "recommendation": "Move secrets to environment variables",
+                        "recommendation": "Use import.meta.env.VITE_* for all secrets",
                     })
-                    break
+                    break  # one flag per file is enough
 
     return flags
 

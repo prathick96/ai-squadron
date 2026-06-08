@@ -24,7 +24,7 @@ export default function Privacy() {
       <section style={sec}>
         <h2 style={h2}>2. Data We Collect</h2>
         <p style={p}><strong style={strong}>Account data:</strong> Email address, password (hashed — never stored in plain text), account preferences, and subscription status.</p>
-        <p style={p}><strong style={strong}>Payment data:</strong> All payment transactions are handled by Paddle (our Merchant of Record). We do not store your credit card number, bank account details, or full payment instrument information. We receive only transaction metadata (subscription status, amount, currency) from Paddle.</p>
+        <p style={p}><strong style={strong}>Payment data:</strong> All payment transactions are handled by Paddle (our payment processor). We do not store your credit card number, bank account details, or full payment instrument information. We receive only transaction metadata (subscription status, amount, currency) from Paddle.</p>
         <p style={p}><strong style={strong}>Usage data:</strong> Pipeline runs initiated, ventures created, agents invoked, API calls made, feature interactions, and session duration. This data is used for platform improvement and abuse prevention.</p>
         <p style={p}><strong style={strong}>Technical data:</strong> IP address, browser type, operating system, referring URL, and device identifiers. Collected automatically when you use the Services.</p>
         <p style={p}><strong style={strong}>Content data:</strong> Any instructions, prompts, briefs, or custom data you provide to the platform to guide AI-generated output. This data is processed to provide the Services and is not used to train our AI models without your explicit consent.</p>
@@ -35,7 +35,7 @@ export default function Privacy() {
         <h2 style={h2}>3. How We Use Your Data</h2>
         <ul style={ul}>
           <li style={li}>To provide, operate, and maintain the Services you have requested.</li>
-          <li style={li}>To process your subscription and communicate billing information through Paddle.</li>
+          <li style={li}>To process your subscription and communicate billing information through Razorpay.</li>
           <li style={li}>To send transactional emails (account confirmation, password reset, subscription receipts).</li>
           <li style={li}>To monitor and improve platform performance, security, and reliability.</li>
           <li style={li}>To enforce our Terms of Service and prevent fraudulent or abusive activity.</li>

@@ -76,16 +76,8 @@ async def main() -> int:
     except Exception as exc:
         _check("Trend snapshot", False, str(exc)[:80])
 
-    gemini = bool(os.getenv("GEMINI_API_KEY"))
     anthropic = bool(os.getenv("ANTHROPIC_API_KEY"))
-    _check("GEMINI_API_KEY", gemini)
     _check("ANTHROPIC_API_KEY", anthropic)
-
-    kimi = any(
-        os.getenv(k, "")
-        for k in ("OPENROUTER_API_KEY", "DEEPINFRA_API_KEY", "MOONSHOT_API_KEY")
-    )
-    _check("Kimi provider key", kimi, "optional — mock council without")
 
     print("\n" + "=" * 40)
     if not supa_ok:
