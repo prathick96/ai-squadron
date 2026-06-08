@@ -14,6 +14,7 @@ Optional: RAILWAY_PROJECT_ID  (targets a specific project instead of auto-managi
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -60,6 +61,12 @@ async def deployment_agent_node(state: AgentState) -> AgentState:
         try:
             deployment_url = await deploy_to_railway(venture_id, build_dir)
             log.info("[DEPLOYMENT_NODE] ✓ Railway deploy | url=%s", deployment_url)
+            # Verification-before-completion: evidence before claims, always.
+            # Railway services take 30-90s to boot after deploy — poll with backoff.
+            smoke_passed = await _health_check(deployment_url)
+            if not smoke_passed:
+                log.warning("[DEPLOYMENT_NODE] Service deployed but not responding | url=%s",
+                            deployment_url)
         except Exception as exc:
             log.warning("[DEPLOYMENT_NODE] Railway deploy failed (%s) — using mock URL", exc)
             smoke_passed = False
@@ -90,3 +97,32 @@ async def deployment_agent_node(state: AgentState) -> AgentState:
 
     new_state = update_stage(state, "MARKETING_SEO_NODE")
     return append_event({**new_state, "deployment_receipt": receipt}, event.model_dump())
+
+
+async def _health_check(url: str, max_attempts: int = 4, interval: float = 30.0) -> bool:
+    """
+    GET the deployed URL, retrying up to max_attempts times with interval-second pauses.
+    Returns True on any HTTP < 400 response; False if all attempts fail.
+    Railway services typically boot within 30-90s after a fresh deploy.
+    """
+    import httpx
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+                resp = await client.get(url)
+            if resp.status_code < 400:
+                log.info("[DEPLOYMENT_NODE] ✓ Health check OK | url=%s status=%d attempt=%d",
+                         url, resp.status_code, attempt)
+                return True
+            log.warning("[DEPLOYMENT_NODE] Health check HTTP %d | url=%s attempt=%d/%d",
+                        resp.status_code, url, attempt, max_attempts)
+        except Exception as exc:
+            log.warning("[DEPLOYMENT_NODE] Health check error | attempt=%d/%d: %s",
+                        attempt, max_attempts, exc)
+        if attempt < max_attempts:
+            await asyncio.sleep(interval)
+
+    log.error("[DEPLOYMENT_NODE] Health check failed after %d attempts | url=%s",
+              max_attempts, url)
+    return False

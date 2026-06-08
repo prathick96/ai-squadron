@@ -126,10 +126,21 @@ PLATFORM CONTEXT (critical — read before evaluating):
   Individual product apps do NOT need their own refund/privacy/terms pages.
   These are PLATFORM-level obligations, already satisfied. Do NOT flag their absence as a violation.
 
+REGULATORY JURISDICTION (from compliance-check methodology):
+  Apply jurisdiction rules based on the venture's target market — do not over-apply:
+  | Regulation | Trigger condition                                    | Key requirement              |
+  |------------|------------------------------------------------------|------------------------------|
+  | GDPR       | Product targets EU users OR collects EU resident data | Consent, right to erasure    |
+  | CCPA       | Product targets CA residents AND collects personal data | Opt-out link, disclosure     |
+  | LGPD       | Product targets Brazilian users                       | Similar to GDPR              |
+  | PIPEDA     | Product targets Canadian users                        | Consent + breach notification |
+  Standard email + usage analytics → platform privacy policy already covers all four.
+  Flag ONLY if the niche involves sensitive categories: health, finance, children, biometrics.
+
 Your ONLY job: identify BUSINESS and CONTENT compliance issues:
   - Platform Terms of Service violations (prohibited content, metadata rules)
   - Copyright exposure (music, trademarked names, unlicensed assets)
-  - Data privacy issues (GDPR/CCPA if collecting sensitive personal data beyond email)
+  - Data privacy issues (GDPR/CCPA/LGPD if collecting sensitive personal data beyond email)
   - Payment compliance: only flag if the venture's NICHE is prohibited by Razorpay
     (gambling, adult content, firearms, drugs, MLM, crypto exchanges)
   - Railway AUP: only flag if the product's purpose is illegal, spam, or mining

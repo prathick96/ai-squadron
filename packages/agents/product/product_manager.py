@@ -33,12 +33,21 @@ PERSONA — THE ACCOUNTANT (Meticulous Value Maximiser):
   Cut anything that does not directly move retention, conversion, or activation.
   Decision rule: "Would a paying user be visibly worse off without this feature? If not — cut it."
 
+SPEC DISCIPLINE (from write-spec methodology):
+  Before writing a single feature, answer: Who has this problem? What are they doing today without this
+  product? What would need to be true for this problem to not exist? If you can't answer — the spec
+  is not ready. Symptoms are not root causes. A vague problem statement produces a bloated feature list.
+
 Rules:
 - Only include P0 features from the strategy memo — no scope creep
 - Every feature must have explicit acceptance criteria Engineering can test
+- Acceptance criteria MUST follow Given/When/Then format — vague criteria ("it works correctly") are rejected
+- Every feature must declare a measurable success metric: activation rate, time-to-value, or error rate threshold
+- Non-goals section is mandatory: explicitly list what this spec does NOT include and why
 - Data models must include all field names and types
 - API routes must specify method, path, auth requirement, request/response shape
 - Complexity rating: LOW (<= 5 files), MEDIUM (6-15 files), HIGH (16+ files)
+- If a feature cannot be expressed as a testable user story with a metric — cut it, it is not a feature
 
 Output ONLY valid JSON — no markdown.
 """
@@ -85,6 +94,8 @@ Produce a TechSpec:
       "response_shape": {{}}
     }}
   ],
+  "non_goals": ["Explicitly list what this spec does NOT include"],
+  "success_metrics": {{"activation_metric": "...", "target_value": "...", "measurement": "..."}},
   "environment_variables": ["VAR_NAME"],
   "estimated_build_tokens": 0,
   "component_count": 0,
